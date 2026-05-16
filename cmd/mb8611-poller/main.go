@@ -19,18 +19,26 @@ func main() {
 	fs := flag.NewFlagSet("mb8611-poller", flag.ExitOnError)
 	configPath := fs.String("config", "config.yaml", "path to config file")
 	runOnce := fs.Bool("run-once", false, "collect once and exit")
-	// --echo is accepted so the documented CLI surface exists, but echo is
-	// wired unconditionally below (this stub has no real backends until
-	// Phase 6, and go-monitor requires at least one backend), so the flag
-	// does not currently toggle echo on or off.
-	_ = fs.Bool("echo", false, "print metrics to stdout")
-	if err := fs.Parse(os.Args[1:]); err != nil {
-		os.Exit(1)
-	}
+	// --echo is accepted so the documented CLI surface exists and stays
+	// stable across phases, but echo is wired unconditionally below: this
+	// stub has no real backends until Phase 6, and go-monitor requires at
+	// least one backend. Until then the flag's value has no effect, so an
+	// explicit --echo=false is honestly warned about rather than silently
+	// ignored. Phase 6 makes --echo meaningful.
+	echo := fs.Bool("echo", false, "print metrics to stdout")
+	// flag.ExitOnError makes fs.Parse os.Exit(2) on bad input, so it never
+	// returns a non-nil error here.
+	fs.Parse(os.Args[1:])
 	_ = configPath // parsed but unused until config loading lands in Phase 6.
 
-	logger, _ := monitor.NewLogger("info")
+	logger, levelVar := monitor.NewLogger("info")
 	slog.SetDefault(logger)
+
+	if !*echo {
+		slog.Warn("echo is unconditionally enabled in this bootstrap build until real backends land (Phase 6); --echo=false has no effect yet")
+	}
+
+	_ = levelVar // intentionally deferred until the SIGHUP/reload path lands in a later phase.
 
 	// Stub collector: no real backends exist yet, so nothing is collected.
 	collectFunc := func(ctx context.Context) ([]*monitor.Metric, error) {
@@ -41,8 +49,9 @@ func main() {
 		monitor.WithConfig(monitor.DefaultConfig()),
 		monitor.WithLogger(logger),
 		monitor.WithRunOnce(*runOnce),
-		// Echo is wired unconditionally until Phase 6 adds real backends:
-		// go-monitor errors with "no backends configured" otherwise.
+		// Echo is wired unconditionally (the --echo flag value is not yet
+		// consulted) until Phase 6 adds real backends: go-monitor errors
+		// with "no backends configured" otherwise.
 		monitor.WithEcho(true),
 	}
 
