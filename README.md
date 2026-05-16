@@ -44,6 +44,7 @@ Common targets:
 
 ## Design
 
-See the design document at
-[`.plans/Designs/Mb8611Poller/README.md`](.plans/Designs/Mb8611Poller/README.md)
-for architecture, the HNAP polling approach, and metric/event mapping.
+The architecture, HNAP polling approach, and metric/event mapping are
+documented in the design at `.plans/Designs/Mb8611Poller/README.md`. That file
+lives in the project's local planning workspace and is intentionally not part
+of the published repository, so it will not be present in a clone.

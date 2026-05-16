@@ -25,11 +25,7 @@ lint:
 # Aggregate phase-verification gate: gofmt check, then vet, then race tests.
 # Non-zero exit on any failure.
 verify:
-	@gofmt_out="$$(gofmt -l .)"; \
-	if [ -n "$$gofmt_out" ]; then \
-		echo "gofmt needs to run on:"; echo "$$gofmt_out"; \
-		exit 1; \
-	fi
+	@test -z "$$(gofmt -l . | tee /dev/stderr)"
 	go vet ./...
 	go test -race ./... -count=1
 
