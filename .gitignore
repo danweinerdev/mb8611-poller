@@ -1,0 +1,15 @@
+# Build artifacts
+bin/
+coverage.out
+coverage.html
+
+# Stray root binary from `go build ./...` (use `make build` -> bin/ instead)
+/mb8611-poller
+
+# Editor / OS cruft
+*.swp
+*.tmp
+.idea/
+
+# Legacy Python venv from the old poller.py era; must never be committed
+.venv/
