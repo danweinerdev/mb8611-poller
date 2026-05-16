@@ -2,10 +2,6 @@ BINARY := mb8611-poller
 BUILD_DIR := bin
 GOFLAGS := -trimpath -ldflags="-s -w"
 
-# go-monitor is a private module; without this every recipe that touches the
-# module graph fails. Exported here so all recipes inherit it automatically.
-export GOPRIVATE := github.com/danweinerdev/*
-
 .PHONY: build test lint verify clean install
 
 build:

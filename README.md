@@ -22,16 +22,8 @@ loading lands in a later phase. The stub parses the flag and runs the
 
 ## Building
 
-`go-monitor` is a **private** module, so any `go` command that touches the
-module graph requires:
-
-```sh
-export GOPRIVATE=github.com/danweinerdev/*
-```
-
-The Makefile sets this automatically for every recipe, so `make build` /
-`make test` / `make verify` work out of the box. A manual `go build ./...`
-needs `GOPRIVATE` exported in your shell first.
+`go-monitor` is a public module; a plain `go build ./...` / `go test ./...`
+resolves it through the default Go module proxy with no extra configuration.
 
 Common targets:
 
