@@ -54,8 +54,9 @@ func (c *client) EnsureLogin(ctx context.Context) error {
 }
 
 func (c *client) Login(ctx context.Context) error {
+	c.loggedIn = false
 	c.privateKey = "withoutloginkey"
-	first, err := c.callOnce(ctx, "Login", loginPayload(c.cfg.Username, ""))
+	first, err := c.callOnce(ctx, "Login", loginPayload(c.cfg.Username, "", "request"))
 	if err != nil {
 		return err
 	}
@@ -70,7 +71,7 @@ func (c *client) Login(ctx context.Context) error {
 	}
 	c.setLoginCookie(challenge.LoginResponse.Cookie)
 	c.privateKey = derivePrivateKey(challenge.LoginResponse.PublicKey, c.cfg.Password, challenge.LoginResponse.Challenge)
-	second, err := c.callOnce(ctx, "Login", loginPayload(c.cfg.Username, hmacMD5(c.privateKey, challenge.LoginResponse.Challenge)))
+	second, err := c.callOnce(ctx, "Login", loginPayload(c.cfg.Username, hmacMD5(c.privateKey, challenge.LoginResponse.Challenge), "login"))
 	if err != nil {
 		return err
 	}
@@ -200,7 +201,7 @@ func (c *client) setLoginCookie(value string) {
 	c.http.Jar.SetCookies(endpoint, []*http.Cookie{cookie})
 }
 
-func loginPayload(user, password string) map[string]any {
-	return map[string]any{"Login": map[string]string{"Action": "request", "Username": user, "LoginPassword": password, "Captcha": "", "PrivateLogin": "LoginPassword"}}
+func loginPayload(user, password, action string) map[string]any {
+	return map[string]any{"Login": map[string]string{"Action": action, "Username": user, "LoginPassword": password, "Captcha": "", "PrivateLogin": "LoginPassword"}}
 }
 func isUnauth(raw json.RawMessage) bool { return bytes.Contains(raw, []byte(`"UN-AUTH"`)) }

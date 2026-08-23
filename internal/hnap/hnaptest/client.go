@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/danweinerdev/mb8611-poller/internal/hnap"
 )
@@ -93,7 +94,11 @@ func (m *MockClient) WithResponse(action string, response json.RawMessage) *Mock
 }
 
 func (m *MockClient) WithFixture(action, relpath string) *MockClient {
-	contents, err := os.ReadFile(filepath.Join("testdata", relpath))
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("hnaptest: determine fixture directory")
+	}
+	contents, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", relpath))
 	if err != nil {
 		panic(fmt.Sprintf("hnaptest: read fixture %q: %v", relpath, err))
 	}
