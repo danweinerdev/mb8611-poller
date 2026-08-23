@@ -145,7 +145,7 @@ so the service can read it without exposing it to other users, and reloads
 systemd:
 
 ```sh
-sudo useradd --system mb8611-poller
+sudo useradd --system --user-group --no-create-home mb8611-poller
 make build
 sudo make install
 # Set modem credentials and enable/configure at least one backend before start.
@@ -160,6 +160,15 @@ the modem credentials and enable at least one backend first; `make install`
 already runs `systemctl daemon-reload`. Run `make build` as your normal user
 before elevating only the installation step; this avoids root-owned build
 artifacts in the checkout.
+
+For upgrades, build and install the new binary the same way, then restart the
+already-running service so it loads the replacement executable:
+
+```sh
+make build
+sudo make install
+sudo systemctl restart mb8611-poller
+```
 
 Create `/etc/mb8611-poller/env` with mode `0600` for secrets such as
 `MB8611_MODEM_PASSWORD`, `MB8611_INFLUXDB_TOKEN`, and `MB8611_ES_API_KEY`.
