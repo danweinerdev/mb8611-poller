@@ -13,3 +13,6 @@ coverage.html
 
 # Legacy Python venv from the old poller.py era; must never be committed
 .venv/
+
+# SDD lifecycle locks are operational state, not planning artifacts.
+*.sdd-lock
