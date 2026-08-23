@@ -16,8 +16,8 @@ func ParseEventLog(raw string) []EventEntry {
 	rows := strings.Split(raw, "}-{")
 	entries := make([]EventEntry, 0, len(rows))
 	for rowNumber, row := range rows {
-		columns := strings.Split(row, "^")
-		if len(columns) != 4 {
+		columns := strings.SplitN(row, "^", 4)
+		if len(columns) < 4 {
 			slog.Warn("skipping malformed event log row", "row", rowNumber, "columns", len(columns))
 			continue
 		}

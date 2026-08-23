@@ -61,23 +61,18 @@ func TestParseDownstreamReinterpretsSignedCounter(t *testing.T) {
 	}
 }
 
-func TestParseDownstreamMalformedNumericField(t *testing.T) {
-	channels := ParseDownstream("7^Locked^QAM256^8^not-a-number^ 2.5^41.2^12^34^")
-	if len(channels) != 1 {
-		t.Fatalf("channel count = %d, want 1", len(channels))
-	}
-
-	if got, want := channels[0], (DownstreamChannel{
-		Channel:     7,
-		LockStatus:  "Locked",
-		Modulation:  "QAM256",
-		ChannelID:   8,
-		PowerDBmV:   2.5,
-		SnrDB:       41.2,
-		Corrected:   12,
-		Uncorrected: 34,
-	}); got != want {
-		t.Errorf("channel = %+v, want %+v", got, want)
+func TestParseDownstreamSkipsMalformedRows(t *testing.T) {
+	for name, raw := range map[string]string{
+		"invalid numeric": "7^Locked^QAM256^8^not-a-number^2.5^41.2^12^34^",
+		"missing column":  "7^Locked^QAM256^8^100^2.5^41.2^12^",
+		"extra column":    "7^Locked^QAM256^8^100^2.5^41.2^12^34^extra",
+		"non-finite":      "7^Locked^QAM256^8^NaN^2.5^41.2^12^34^",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := ParseDownstream(raw); len(got) != 0 {
+				t.Fatalf("channels = %+v, want no channels", got)
+			}
+		})
 	}
 }
 

@@ -41,6 +41,15 @@ func TestParseEventLogMalformedRow(t *testing.T) {
 	}
 }
 
+func TestParseEventLogPreservesCaretsInMessage(t *testing.T) {
+	entries := ParseEventLog("08:00:00^Fri Aug 21 2026^Notice^first^second^third")
+	if got, want := entries, []EventEntry{{
+		Time: "08:00:00", Date: "Fri Aug 21 2026", Severity: "Notice", Message: "first^second^third",
+	}}; len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("event entries = %+v, want %+v", got, want)
+	}
+}
+
 func TestParseEventLogEmpty(t *testing.T) {
 	if got := ParseEventLog(""); got != nil {
 		t.Errorf("ParseEventLog(\"\") = %+v, want nil", got)

@@ -52,11 +52,37 @@ Use the environment overrides below rather than placing secrets in YAML.
 | `elasticsearch.username` | Elasticsearch basic-auth username; used only when no API key is supplied. |
 | `elasticsearch.password` | Elasticsearch basic-auth password; required with `username` when no API key is supplied. |
 | `elasticsearch.insecure_tls` | Disable Elasticsearch TLS verification. Defaults to `false`; enable only for a deliberately trusted self-signed deployment. |
-| `elasticsearch.id_from_tag` | Tag used as the Elasticsearch document ID. Empty leaves ID selection to the backend; `doc_id` makes event writes idempotent. |
+| `elasticsearch.id_from_tag` | Tag used as the Elasticsearch document ID. Empty leaves ID selection to the backend; `doc_id` makes event writes idempotent and omits that tag from `_source`. |
 | `routing.influxdb_include` | InfluxDB measurement allowlist. Empty or omitted uses `docsis_downstream`, `docsis_upstream`, and `docsis_modem`. |
 | `routing.elasticsearch_include` | Elasticsearch measurement allowlist. Empty or omitted uses `docsis_event`. |
 
 `config.yaml.example` contains every field and the recommended routing values.
+
+## Telemetry schema and capture
+
+Each poll authenticates to the modem and issues the six status actions through
+HNAP's `GetMultipleHNAPs` method. Every emitted metric uses the poll observation
+time as `@timestamp`; it is not the modem event's occurrence time. The current
+measurement schemas are:
+
+| Measurement | Tags | Fields |
+| --- | --- | --- |
+| `docsis_downstream` | `host`, `modem`, `channel_id`, `channel`, `modulation`, `lock_status` | `frequency_mhz` (`float64`), `power_dbmv` (`float64`), `snr_db` (`float64`), `corrected` (`uint64`), `uncorrected` (`uint64`) |
+| `docsis_upstream` | `host`, `modem`, `channel_id`, `channel`, `channel_type`, `lock_status` | `frequency_mhz` (`float64`), `power_dbmv` (`float64`), `symb_rate_ksps` (`int`) |
+| `docsis_modem` | `host`, `modem`, `mac`, `serial`, `boot_status`, `connectivity_status`, `security_status`, `firmware_version` | `uptime_seconds` (`float64`), `ds_freq_mhz` (`float64`) |
+| `docsis_event` | `host`, `modem`, `severity`, `doc_id` | `message` (`string`), `raw_date` (`string`), `raw_time` (`string`) |
+
+By default, `docsis_downstream`, `docsis_upstream`, and `docsis_modem` route to
+InfluxDB, while `docsis_event` routes to Elasticsearch. With
+`elasticsearch.id_from_tag: doc_id`, the event `doc_id` becomes the
+Elasticsearch `_id` and is omitted from `_source`. When `id_from_tag` is empty
+or names a custom tag, `doc_id` remains a normal tag/document property.
+Event `raw_date` and `raw_time` are modem-provided strings with no timezone.
+
+The modem also currently makes these values available but does not emit them as
+metrics: network access; software specification, hardware, certificate, and
+customer versions; and startup boot, configuration-file, connectivity,
+downstream, and security comments and configuration-file status.
 
 ## Environment Variables
 
@@ -108,7 +134,8 @@ grant only the index privileges required by the Elasticsearch deployment. API
 keys are generally preferable to long-lived basic-auth passwords.
 
 Set `elasticsearch.id_from_tag: doc_id` to use the event's stable ID for
-idempotent writes.
+idempotent writes. With the strict template, explicitly map any custom tag
+named by `id_from_tag` before using it.
 
 #### Pre-create ES index
 

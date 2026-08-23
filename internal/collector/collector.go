@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -109,7 +110,7 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 		metrics := make([]*monitor.Metric, 0)
 		collectedAt := c.clock()
 
-		if raw, ok := responseFor(responses, downstreamAction); ok {
+		if raw, ok := responseFor(c, responses, downstreamAction); ok {
 			var response struct {
 				Channels string `json:"MotoConnDownstreamChannel"`
 			}
@@ -120,11 +121,9 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 					metrics = append(metrics, downstreamMetric(channel, baseTags, collectedAt))
 				}
 			}
-		} else {
-			c.logger.Warn("HNAP response missing action", "action", downstreamAction)
 		}
 
-		if raw, ok := responseFor(responses, upstreamAction); ok {
+		if raw, ok := responseFor(c, responses, upstreamAction); ok {
 			var response struct {
 				Channels string `json:"MotoConnUpstreamChannel"`
 			}
@@ -135,18 +134,18 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 					metrics = append(metrics, upstreamMetric(channel, baseTags, collectedAt))
 				}
 			}
-		} else {
-			c.logger.Warn("HNAP response missing action", "action", upstreamAction)
 		}
 
 		connection, connectionOK := parseConnection(c, responses)
 		software, softwareOK := parseSoftware(c, responses)
 		startup, startupOK := parseStartup(c, responses)
 		if connectionOK && softwareOK && startupOK {
-			metrics = append(metrics, modemMetric(connection, software, startup, baseTags, collectedAt))
+			if metric := c.modemMetric(connection, software, startup, baseTags, collectedAt); metric != nil {
+				metrics = append(metrics, metric)
+			}
 		}
 
-		if raw, ok := responseFor(responses, logAction); ok {
+		if raw, ok := responseFor(c, responses, logAction); ok {
 			var response struct {
 				Entries string `json:"MotoStatusLogList"`
 			}
@@ -157,8 +156,6 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 					metrics = append(metrics, eventMetric(entry, baseTags, collectedAt))
 				}
 			}
-		} else {
-			c.logger.Warn("HNAP response missing action", "action", logAction)
 		}
 
 		return metrics, nil
@@ -181,15 +178,38 @@ func (c *Collector) enterLockoutCooldown() {
 	}
 }
 
-func responseFor(responses map[string]json.RawMessage, action string) (json.RawMessage, bool) {
-	response, ok := responses[action+"Response"]
-	return response, ok
+func responseFor(c *Collector, responses map[string]json.RawMessage, action string) (json.RawMessage, bool) {
+	raw, ok := responses[action+"Response"]
+	if !ok {
+		c.logger.Warn("HNAP response missing action", "action", action)
+		return nil, false
+	}
+
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &response); err != nil {
+		c.logger.Warn("failed to parse HNAP action response", "action", action, "error", err)
+		return nil, false
+	}
+	resultRaw, ok := response[action+"Result"]
+	if !ok {
+		c.logger.Warn("HNAP action response missing result", "action", action)
+		return nil, false
+	}
+	var result string
+	if err := json.Unmarshal(resultRaw, &result); err != nil {
+		c.logger.Warn("failed to parse HNAP action result", "action", action, "error", err)
+		return nil, false
+	}
+	if result != "OK" {
+		c.logger.Warn("HNAP action response was not OK", "action", action, "result", result)
+		return nil, false
+	}
+	return raw, true
 }
 
 func parseConnection(c *Collector, responses map[string]json.RawMessage) (docsis.ConnectionInfo, bool) {
-	raw, ok := responseFor(responses, connectionAction)
+	raw, ok := responseFor(c, responses, connectionAction)
 	if !ok {
-		c.logger.Warn("HNAP response missing action", "action", connectionAction)
 		return docsis.ConnectionInfo{}, false
 	}
 	connection, err := docsis.ParseConnectionInfo(raw)
@@ -205,9 +225,8 @@ func parseConnection(c *Collector, responses map[string]json.RawMessage) (docsis
 }
 
 func parseSoftware(c *Collector, responses map[string]json.RawMessage) (docsis.Software, bool) {
-	raw, ok := responseFor(responses, softwareAction)
+	raw, ok := responseFor(c, responses, softwareAction)
 	if !ok {
-		c.logger.Warn("HNAP response missing action", "action", softwareAction)
 		return docsis.Software{}, false
 	}
 	software, err := docsis.ParseSoftware(raw)
@@ -223,9 +242,8 @@ func parseSoftware(c *Collector, responses map[string]json.RawMessage) (docsis.S
 }
 
 func parseStartup(c *Collector, responses map[string]json.RawMessage) (docsis.StartupSequence, bool) {
-	raw, ok := responseFor(responses, startupAction)
+	raw, ok := responseFor(c, responses, startupAction)
 	if !ok {
-		c.logger.Warn("HNAP response missing action", "action", startupAction)
 		return docsis.StartupSequence{}, false
 	}
 	startup, err := docsis.ParseStartupSequence(raw)
@@ -278,7 +296,14 @@ func upstreamMetric(channel docsis.UpstreamChannel, baseTags map[string]string, 
 	}
 }
 
-func modemMetric(connection docsis.ConnectionInfo, software docsis.Software, startup docsis.StartupSequence, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
+func (c *Collector) modemMetric(connection docsis.ConnectionInfo, software docsis.Software, startup docsis.StartupSequence, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
+	uptime, uptimeOK := connection.Uptime()
+	frequency, frequencyOK := frequencyMHz(startup.DSFreq)
+	if !uptimeOK || !frequencyOK {
+		c.logger.Warn("skipping modem metric with invalid numeric data", "uptime", connection.SystemUpTime, "ds_frequency", startup.DSFreq)
+		return nil
+	}
+
 	tags := copyTags(baseTags)
 	tags["mac"] = software.MacAddress
 	tags["serial"] = software.SerialNum
@@ -287,14 +312,13 @@ func modemMetric(connection docsis.ConnectionInfo, software docsis.Software, sta
 	tags["security_status"] = startup.SecurityStatus
 	tags["firmware_version"] = software.SfVer
 
-	uptime, _ := connection.Uptime()
 	return &monitor.Metric{
 		Measurement: "docsis_modem",
 		Timestamp:   timestamp,
 		Tags:        tags,
 		Fields: map[string]interface{}{
 			"uptime_seconds": uptime.Seconds(),
-			"ds_freq_mhz":    frequencyMHz(startup.DSFreq),
+			"ds_freq_mhz":    frequency,
 		},
 	}
 }
@@ -323,14 +347,14 @@ func copyTags(tags map[string]string) map[string]string {
 	return copy
 }
 
-func frequencyMHz(raw string) float64 {
+func frequencyMHz(raw string) (float64, bool) {
 	fields := strings.Fields(raw)
-	if len(fields) == 0 {
-		return 0
+	if len(fields) != 2 || fields[1] != "Hz" {
+		return 0, false
 	}
 	value, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil {
-		return 0
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0, false
 	}
-	return value / 1_000_000
+	return value / 1_000_000, true
 }

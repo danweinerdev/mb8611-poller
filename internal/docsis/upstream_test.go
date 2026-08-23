@@ -53,21 +53,18 @@ func TestParseUpstreamTrailingColumn(t *testing.T) {
 	}
 }
 
-func TestParseUpstreamMalformedNumericField(t *testing.T) {
-	channels := ParseUpstream("7^Locked^SC-QAM^8^not-a-number^ 17.6^40.3^")
-	if len(channels) != 1 {
-		t.Fatalf("channel count = %d, want 1", len(channels))
-	}
-
-	if got, want := channels[0], (UpstreamChannel{
-		Channel:     7,
-		LockStatus:  "Locked",
-		ChannelType: "SC-QAM",
-		ChannelID:   8,
-		FreqMHz:     17.6,
-		PowerDBmV:   40.3,
-	}); got != want {
-		t.Errorf("channel = %+v, want %+v", got, want)
+func TestParseUpstreamSkipsMalformedRows(t *testing.T) {
+	for name, raw := range map[string]string{
+		"invalid numeric": "7^Locked^SC-QAM^8^not-a-number^17.6^40.3^",
+		"missing column":  "7^Locked^SC-QAM^8^5120^17.6^",
+		"extra column":    "7^Locked^SC-QAM^8^5120^17.6^40.3^extra",
+		"non-finite":      "7^Locked^SC-QAM^8^5120^+Inf^40.3^",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := ParseUpstream(raw); len(got) != 0 {
+				t.Fatalf("channels = %+v, want no channels", got)
+			}
+		})
 	}
 }
 

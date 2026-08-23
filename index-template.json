@@ -2,6 +2,7 @@
   "index_patterns": ["mb8611-events*"],
   "template": {
     "mappings": {
+      "dynamic": "strict",
       "properties": {
         "@timestamp": {"type": "date"},
         "measurement": {"type": "keyword"},

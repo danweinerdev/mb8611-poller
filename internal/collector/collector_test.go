@@ -158,7 +158,7 @@ func TestMakeCollectFuncMultiLockoutStartsCooldown(t *testing.T) {
 }
 
 func TestMakeCollectFuncOmitsEmptyModemResponse(t *testing.T) {
-	mock := fixtureClient().WithResponse(connectionAction, json.RawMessage(`{}`))
+	mock := fixtureClient().WithResponse(connectionAction, json.RawMessage(`{"GetMotoStatusConnectionInfoResult":"OK"}`))
 	metrics, err := MakeCollectFunc(NewCollector(mock, Config{}, slog.Default()))(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestMakeCollectFuncWholeMultiFailure(t *testing.T) {
 }
 
 func TestMakeCollectFuncDropsMalformedEventRows(t *testing.T) {
-	mock := fixtureClient().WithResponse(logAction, json.RawMessage(`{"MotoStatusLogList":"08:00:00^Fri Aug 21 2026^Notice^first}-{malformed^row}-{09:00:00^Fri Aug 21 2026^Critical^last"}`))
+	mock := fixtureClient().WithResponse(logAction, json.RawMessage(`{"MotoStatusLogList":"08:00:00^Fri Aug 21 2026^Notice^first}-{malformed^row}-{09:00:00^Fri Aug 21 2026^Critical^last","GetMotoStatusLogResult":"OK"}`))
 	metrics, err := MakeCollectFunc(NewCollector(mock, Config{}, slog.Default()))(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -289,6 +289,62 @@ func TestMakeCollectFuncDropsMalformedEventRows(t *testing.T) {
 	}
 	if got, want := messages, []any{"first", "last"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("event messages = %v, want %v", got, want)
+	}
+}
+
+func TestMakeCollectFuncNonOKActionResultOmitsOnlyActionGroup(t *testing.T) {
+	baseline := metricCounts(collectFixtureMetrics(t, fixtureClient()))
+	for _, action := range []string{downstreamAction, upstreamAction, connectionAction, softwareAction, startupAction, logAction} {
+		t.Run(action, func(t *testing.T) {
+			mock := fixtureClient().WithResponse(action, actionResult(action, `"FAILED"`))
+			counts := metricCounts(collectFixtureMetrics(t, mock))
+			assertActionGroupOmitted(t, counts, baseline, action)
+		})
+	}
+}
+
+func TestMakeCollectFuncMissingOrMalformedActionResultOmitsOnlyActionGroup(t *testing.T) {
+	tests := []struct {
+		name     string
+		action   string
+		response json.RawMessage
+	}{
+		{name: "missing", action: downstreamAction, response: json.RawMessage(`{}`)},
+		{name: "malformed", action: upstreamAction, response: actionResult(upstreamAction, `1`)},
+	}
+	baseline := metricCounts(collectFixtureMetrics(t, fixtureClient()))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := fixtureClient().WithResponse(test.action, test.response)
+			counts := metricCounts(collectFixtureMetrics(t, mock))
+			assertActionGroupOmitted(t, counts, baseline, test.action)
+		})
+	}
+}
+
+func TestMakeCollectFuncOmitsModemMetricForInvalidNumericData(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		action   string
+		response json.RawMessage
+	}{
+		{
+			name:     "invalid uptime",
+			action:   connectionAction,
+			response: json.RawMessage(`{"MotoConnNetworkAccess":"Allowed","MotoConnSystemUpTime":"unknown","GetMotoStatusConnectionInfoResult":"OK"}`),
+		},
+		{
+			name:     "frequency with MHz unit",
+			action:   startupAction,
+			response: json.RawMessage(`{"MotoConnBootStatus":"OK","MotoConnConnectivityStatus":"OK","MotoConnSecurityStatus":"Enabled","MotoConnDSFreq":"237 MHz","GetMotoStatusStartupSequenceResult":"OK"}`),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			metrics := collectFixtureMetrics(t, fixtureClient().WithResponse(test.action, test.response))
+			if got := metricCounts(metrics)["docsis_modem"]; got != 0 {
+				t.Fatalf("modem metrics = %d, want 0", got)
+			}
+		})
 	}
 }
 
@@ -394,6 +450,30 @@ func eventDocIDs(metrics []*monitor.Metric) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func actionResult(action, result string) json.RawMessage {
+	return json.RawMessage(`{"` + action + `Result":` + result + `}`)
+}
+
+func assertActionGroupOmitted(t *testing.T, counts, baseline map[string]int, action string) {
+	t.Helper()
+	omittedMeasurement := map[string]string{
+		downstreamAction: "docsis_downstream",
+		upstreamAction:   "docsis_upstream",
+		connectionAction: "docsis_modem",
+		softwareAction:   "docsis_modem",
+		startupAction:    "docsis_modem",
+		logAction:        "docsis_event",
+	}[action]
+	for measurement, want := range baseline {
+		if measurement == omittedMeasurement {
+			want = 0
+		}
+		if got := counts[measurement]; got != want {
+			t.Errorf("%s metric count = %d, want %d after %s result failure", measurement, got, want, action)
+		}
+	}
 }
 
 func fixtureClient() *hnaptest.MockClient {
