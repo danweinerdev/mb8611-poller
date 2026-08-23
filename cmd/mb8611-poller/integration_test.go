@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -46,7 +47,7 @@ elasticsearch:
 	}
 
 	var first bytes.Buffer
-	if got := run([]string{"--config", configPath, "--echo", "--run-once"}, &first); got != 0 {
+	if got := run([]string{"run-once", "--echo", "--config", configPath}, &first, io.Discard); got != 0 {
 		t.Fatalf("first run() = %d, output:\n%s", got, first.String())
 	}
 	var logResponse struct {
@@ -71,7 +72,7 @@ elasticsearch:
 	}
 
 	var second bytes.Buffer
-	if got := run([]string{"--config", configPath, "--echo", "--run-once"}, &second); got != 0 {
+	if got := run([]string{"run-once", "--echo", "--config", configPath}, &second, io.Discard); got != 0 {
 		t.Fatalf("second run() = %d, output:\n%s", got, second.String())
 	}
 	secondDocIDs := eventDocIDsFromOutput(t, second.String())

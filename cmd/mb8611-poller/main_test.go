@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -48,7 +49,7 @@ func TestRunEchoOnce(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	if got := run([]string{"--config", configPath, "--echo", "--run-once"}, &output); got != 0 {
+	if got := run([]string{"run-once", "--echo", "--config", configPath}, &output, io.Discard); got != 0 {
 		t.Fatalf("run() = %d, output: %s", got, output.String())
 	}
 	for _, measurement := range []string{"docsis_downstream,", "docsis_upstream,", "docsis_modem,", "docsis_event,"} {
@@ -58,6 +59,109 @@ func TestRunEchoOnce(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "host=poller-host") {
 		t.Errorf("echo output missing configured hostname tag:\n%s", output.String())
+	}
+}
+
+func TestCommandDispatchAndPersistentFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		want    commandOptions
+		runOnce bool
+	}{
+		{
+			name:    "flags before run",
+			args:    []string{"--config", "before.yaml", "run", "--echo"},
+			want:    commandOptions{configPath: "before.yaml", echo: true},
+			runOnce: false,
+		},
+		{
+			name:    "flags after run once",
+			args:    []string{"run-once", "--echo", "--config", "after.yaml"},
+			want:    commandOptions{configPath: "after.yaml", echo: true},
+			runOnce: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			got := executeCommand(tt.args, io.Discard, io.Discard, func(options commandOptions, runOnce bool, _, _ io.Writer) int {
+				called = true
+				if options != tt.want {
+					t.Errorf("options = %#v, want %#v", options, tt.want)
+				}
+				if runOnce != tt.runOnce {
+					t.Errorf("runOnce = %t, want %t", runOnce, tt.runOnce)
+				}
+				return 0
+			})
+			if got != 0 {
+				t.Fatalf("executeCommand() = %d, want 0", got)
+			}
+			if !called {
+				t.Fatal("monitor runner was not called")
+			}
+		})
+	}
+}
+
+func TestCommandHelpAndUsageErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantCode   int
+		wantStdout string
+		wantStderr string
+	}{
+		{name: "no command", wantCode: 2, wantStderr: "a command is required"},
+		{name: "flags without command", args: []string{"--config", "test.yaml", "--echo"}, wantCode: 2, wantStderr: "a command is required"},
+		{name: "root help", args: []string{"--help"}, wantCode: 0, wantStdout: "Usage:"},
+		{name: "command help", args: []string{"run-once", "--help"}, wantCode: 0, wantStdout: "Usage:"},
+		{name: "unknown command", args: []string{"unknown"}, wantCode: 2, wantStderr: "unknown command"},
+		{name: "invalid flag", args: []string{"run", "--unknown"}, wantCode: 2, wantStderr: "unknown flag"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			called := false
+			got := executeCommand(tt.args, &stdout, &stderr, func(commandOptions, bool, io.Writer, io.Writer) int {
+				called = true
+				return 0
+			})
+			if got != tt.wantCode {
+				t.Fatalf("executeCommand() = %d, want %d", got, tt.wantCode)
+			}
+			if !strings.Contains(stdout.String(), tt.wantStdout) {
+				t.Errorf("stdout = %q, want it to contain %q", stdout.String(), tt.wantStdout)
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantStderr)
+			}
+			if tt.wantStdout == "" && stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+			if tt.wantStderr == "" && stderr.Len() != 0 {
+				t.Errorf("stderr = %q, want empty", stderr.String())
+			}
+			if called {
+				t.Fatal("monitor runner was called")
+			}
+		})
+	}
+}
+
+func TestRuntimeDiagnosticsUseStderr(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"run-once", "--config", filepath.Join(t.TempDir(), "missing.yaml")}, &stdout, &stderr); got != 1 {
+		t.Fatalf("run() = %d, want 1", got)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "load config:") {
+		t.Errorf("stderr = %q, want config load diagnostic", stderr.String())
 	}
 }
 

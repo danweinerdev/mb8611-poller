@@ -17,16 +17,21 @@ Copy the example, replace its placeholders, and use echo mode to inspect the
 collected metrics without writing to either backend:
 
 ```sh
-make build && cp config.yaml.example config.yaml && $EDITOR config.yaml && ./bin/mb8611-poller --echo --run-once --config config.yaml
+make build && cp config.yaml.example config.yaml && $EDITOR config.yaml && ./bin/mb8611-poller run-once --echo --config config.yaml
 ```
 
-`--echo` still contacts the modem, but it does not connect to InfluxDB or
-Elasticsearch. Production runs need at least one enabled, fully configured
-backend.
+Use `mb8611-poller run` for the continuous polling loop or
+`mb8611-poller run-once` for one collection and exit. The persistent `--echo`
+flag still contacts the modem, but it does not connect to InfluxDB or
+Elasticsearch; it prints collected metrics to stdout instead. Production runs
+need at least one enabled, fully configured backend. A subcommand is required;
+invoking the binary with flags alone exits with a usage error rather than
+silently doing no work.
 
 ## Configuration
 
-The daemon reads the file named by `--config` (default `config.yaml`). YAML
+The daemon reads the file named by `--config` (default `config.yaml`). Both
+commands accept `--config` and `--echo` before or after the subcommand. YAML
 values are literal; shell-style environment interpolation is not supported.
 Use the environment overrides below rather than placing secrets in YAML.
 
@@ -222,7 +227,7 @@ a systemd host. On a development machine without either, do not run the
 install target; validate directly instead:
 
 ```sh
-./bin/mb8611-poller --config config.yaml --echo --run-once
+./bin/mb8611-poller run-once --config config.yaml --echo
 ```
 
 The systemd path is manually verified on the target deployment host, not in
