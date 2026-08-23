@@ -1,0 +1,168 @@
+package hnap
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/cookiejar"
+	"strings"
+	"time"
+)
+
+type Client interface {
+	EnsureLogin(context.Context) error
+	Login(context.Context) error
+	Call(context.Context, string, any) (json.RawMessage, error)
+	Multi(context.Context, ...string) (map[string]json.RawMessage, error)
+	Logout(context.Context) error
+}
+
+type Config struct {
+	Host        string
+	Username    string
+	Password    string
+	Timeout     time.Duration
+	InsecureTLS bool
+}
+
+type client struct {
+	cfg        Config
+	http       *http.Client
+	endpoint   string
+	loggedIn   bool
+	privateKey string
+}
+
+func New(cfg Config) Client {
+	if cfg.Timeout == 0 {
+		cfg.Timeout = 10 * time.Second
+	}
+	jar, _ := cookiejar.New(nil)
+	return &client{cfg: cfg, endpoint: "https://" + strings.TrimPrefix(cfg.Host, "https://") + "/HNAP1/", http: &http.Client{Timeout: cfg.Timeout, Jar: jar, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureTLS}}}} // #nosec G402 -- explicitly configured for the modem's self-signed cert.
+}
+
+func (c *client) EnsureLogin(ctx context.Context) error {
+	if c.loggedIn {
+		return nil
+	}
+	return c.Login(ctx)
+}
+
+func (c *client) Login(ctx context.Context) error {
+	first, err := c.callOnce(ctx, "Login", loginPayload(c.cfg.Username, ""))
+	if err != nil {
+		return err
+	}
+	var challenge struct {
+		LoginResponse struct{ LoginResult, PublicKey, Challenge string }
+	}
+	if err := json.Unmarshal(first, &challenge); err != nil {
+		return fmt.Errorf("hnap: decode login challenge: %w", err)
+	}
+	if challenge.LoginResponse.LoginResult == "FAILED" {
+		return ErrLockedOut
+	}
+	c.privateKey = derivePrivateKey(challenge.LoginResponse.PublicKey, c.cfg.Password, challenge.LoginResponse.Challenge)
+	second, err := c.callOnce(ctx, "Login", loginPayload(c.cfg.Username, hmacMD5(c.privateKey, challenge.LoginResponse.Challenge)))
+	if err != nil {
+		return err
+	}
+	var result struct{ LoginResponse struct{ LoginResult string } }
+	if err := json.Unmarshal(second, &result); err != nil {
+		return fmt.Errorf("hnap: decode login result: %w", err)
+	}
+	if result.LoginResponse.LoginResult != "OK" {
+		c.loggedIn = false
+		return ErrAuthFailed
+	}
+	c.loggedIn = true
+	return nil
+}
+
+func (c *client) Call(ctx context.Context, action string, payload any) (json.RawMessage, error) {
+	response, err := c.callOnce(ctx, action, payload)
+	if err != nil || !isUnauth(response) {
+		return response, err
+	}
+	c.loggedIn = false
+	if err := c.EnsureLogin(ctx); err != nil {
+		return nil, err
+	}
+	response, err = c.callOnce(ctx, action, payload)
+	if err != nil {
+		return nil, err
+	}
+	if isUnauth(response) {
+		c.loggedIn = false
+		return nil, ErrUnauth
+	}
+	return response, nil
+}
+
+func (c *client) Multi(ctx context.Context, actions ...string) (map[string]json.RawMessage, error) {
+	requested := make(map[string]string, len(actions))
+	for _, action := range actions {
+		requested[action] = ""
+	}
+	response, err := c.Call(ctx, "GetMultipleHNAPs", map[string]any{"GetMultipleHNAPs": requested})
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Response map[string]json.RawMessage `json:"GetMultipleHNAPsResponse"`
+	}
+	if err := json.Unmarshal(response, &wrapper); err != nil {
+		return nil, fmt.Errorf("hnap: decode multiple response: %w", err)
+	}
+	return wrapper.Response, nil
+}
+
+func (c *client) Logout(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(c.endpoint, "/HNAP1/")+"/Logout.html", nil)
+	if err != nil {
+		return err
+	}
+	response, err := c.http.Do(req)
+	if response != nil {
+		response.Body.Close()
+	}
+	c.loggedIn = false
+	return err
+}
+
+func (c *client) callOnce(ctx context.Context, action string, payload any) (json.RawMessage, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("SOAPACTION", makeSOAPAction(action))
+	req.Header.Set("HNAP_AUTH", makeHNAPAuth(action, c.privateKey, time.Now()))
+	response, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("hnap: HTTP %s", response.Status)
+	}
+	var raw json.RawMessage
+	if err := json.NewDecoder(response.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func loginPayload(user, password string) map[string]any {
+	return map[string]any{"Login": map[string]string{"Action": "request", "Username": user, "LoginPassword": password, "Captcha": "", "PrivateLogin": "LoginPassword"}}
+}
+func isUnauth(raw json.RawMessage) bool { return bytes.Contains(raw, []byte(`"UN-AUTH"`)) }
