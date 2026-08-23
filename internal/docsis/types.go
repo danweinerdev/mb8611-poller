@@ -13,3 +13,14 @@ type DownstreamChannel struct {
 	Corrected   uint64
 	Uncorrected uint64
 }
+
+// UpstreamChannel is one row from MotoConnUpstreamChannel.
+type UpstreamChannel struct {
+	Channel      int
+	LockStatus   string
+	ChannelType  string
+	ChannelID    int
+	SymbRateKsps int
+	FreqMHz      float64
+	PowerDBmV    float64
+}
