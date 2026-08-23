@@ -1,6 +1,6 @@
 module github.com/danweinerdev/mb8611-poller
 
-go 1.25.5
+go 1.26.5
 
 require github.com/danweinerdev/go-monitor v0.1.0
 
