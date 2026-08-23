@@ -20,6 +20,9 @@ variables with the `MB8611_` prefix override its values. `--echo` writes the
 normally routed metrics to standard output instead of connecting to InfluxDB
 or Elasticsearch.
 
+YAML values are literal: `${VAR}` shell-style interpolation is not supported.
+Set the documented `MB8611_*` environment variables to override configuration.
+
 TLS certificate verification is enabled by default. MB8611 firmware commonly
 uses a self-signed certificate, so set `modem.insecure_tls: true` only on a
 trusted local network when verification cannot succeed.
