@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -42,7 +43,7 @@ func New(cfg Config) Client {
 		cfg.Timeout = 10 * time.Second
 	}
 	jar, _ := cookiejar.New(nil)
-	return &client{cfg: cfg, endpoint: "https://" + strings.TrimPrefix(cfg.Host, "https://") + "/HNAP1/", http: &http.Client{Timeout: cfg.Timeout, Jar: jar, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureTLS}}}} // #nosec G402 -- explicitly configured for the modem's self-signed cert.
+	return &client{cfg: cfg, endpoint: "https://" + strings.TrimPrefix(cfg.Host, "https://") + "/HNAP1/", privateKey: "withoutloginkey", http: &http.Client{Timeout: cfg.Timeout, Jar: jar, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureTLS}}}} // #nosec G402 -- explicitly configured for the modem's self-signed cert.
 }
 
 func (c *client) EnsureLogin(ctx context.Context) error {
@@ -58,7 +59,7 @@ func (c *client) Login(ctx context.Context) error {
 		return err
 	}
 	var challenge struct {
-		LoginResponse struct{ LoginResult, PublicKey, Challenge string }
+		LoginResponse struct{ LoginResult, PublicKey, Challenge, Cookie string }
 	}
 	if err := json.Unmarshal(first, &challenge); err != nil {
 		return fmt.Errorf("hnap: decode login challenge: %w", err)
@@ -66,6 +67,7 @@ func (c *client) Login(ctx context.Context) error {
 	if challenge.LoginResponse.LoginResult == "FAILED" {
 		return ErrLockedOut
 	}
+	c.setLoginCookie(challenge.LoginResponse.Cookie)
 	c.privateKey = derivePrivateKey(challenge.LoginResponse.PublicKey, c.cfg.Password, challenge.LoginResponse.Challenge)
 	second, err := c.callOnce(ctx, "Login", loginPayload(c.cfg.Username, hmacMD5(c.privateKey, challenge.LoginResponse.Challenge)))
 	if err != nil {
@@ -127,11 +129,19 @@ func (c *client) Logout(ctx context.Context) error {
 		return err
 	}
 	response, err := c.http.Do(req)
+	if err != nil {
+		slog.Debug("hnap logout request failed", "error", err)
+		c.loggedIn = false
+		return nil
+	}
 	if response != nil {
 		response.Body.Close()
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			slog.Debug("hnap logout rejected", "status", response.Status)
+		}
 	}
 	c.loggedIn = false
-	return err
+	return nil
 }
 
 func (c *client) callOnce(ctx context.Context, action string, payload any) (json.RawMessage, error) {
@@ -172,6 +182,17 @@ func (c *client) clearMalformedCookie() {
 		return
 	}
 	c.http.Jar.SetCookies(endpoint, []*http.Cookie{{Name: "", Value: "", Path: "/HNAP1", MaxAge: -1}})
+}
+
+func (c *client) setLoginCookie(value string) {
+	if value == "" {
+		return
+	}
+	endpoint, err := url.Parse(c.endpoint)
+	if err != nil {
+		return
+	}
+	c.http.Jar.SetCookies(endpoint, []*http.Cookie{{Name: "uid", Value: value, Path: "/"}})
 }
 
 func loginPayload(user, password string) map[string]any {
