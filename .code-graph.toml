@@ -1,0 +1,3 @@
+# Project uses code-graph's standard Go and Python extensions. Existing
+# .gitignore rules already exclude generated output, dependencies, and caches,
+# so no project-specific discovery or parser overrides are needed.
