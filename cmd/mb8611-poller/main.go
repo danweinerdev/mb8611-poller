@@ -1,68 +1,122 @@
 // Command mb8611-poller polls status from a Motorola MB8611 cable modem and
 // publishes the collected metrics through go-monitor.
-//
-// This is the bootstrap stub from task 2.2: the CLI surface and go-monitor
-// wiring are in place, but the collector returns no metrics yet. Real
-// collection and backends arrive in later phases.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
 	monitor "github.com/danweinerdev/go-monitor"
+	"github.com/danweinerdev/go-monitor/elasticsearch"
+	"github.com/danweinerdev/go-monitor/influxdb"
+	"github.com/danweinerdev/mb8611-poller/internal/collector"
+	"github.com/danweinerdev/mb8611-poller/internal/config"
+	"github.com/danweinerdev/mb8611-poller/internal/hnap"
 )
 
 func main() {
-	fs := flag.NewFlagSet("mb8611-poller", flag.ExitOnError)
-	configPath := fs.String("config", "config.yaml", "path to config file")
-	runOnce := fs.Bool("run-once", false, "collect once and exit")
-	// --echo is accepted so the documented CLI surface exists and stays
-	// stable across phases, but echo is wired unconditionally below: this
-	// stub has no real backends until Phase 6, and go-monitor requires at
-	// least one backend. Until then the flag's value has no effect, so an
-	// explicit --echo=false is honestly warned about rather than silently
-	// ignored. Phase 6 makes --echo meaningful.
-	echo := fs.Bool("echo", false, "print metrics to stdout")
-	// flag.ExitOnError makes fs.Parse os.Exit(2) on bad input, so it never
-	// returns a non-nil error here.
-	fs.Parse(os.Args[1:])
-	_ = configPath // parsed but unused until config loading lands in Phase 6.
+	os.Exit(run(os.Args[1:], os.Stdout))
+}
 
-	logger, levelVar := monitor.NewLogger("info")
-	slog.SetDefault(logger)
-
-	if !*echo {
-		slog.Warn("echo is unconditionally enabled in this bootstrap build until real backends land (Phase 6); --echo=false has no effect yet")
+// run is the testable command entry point.
+func run(args []string, stdout io.Writer) int {
+	flags := flag.NewFlagSet("mb8611-poller", flag.ContinueOnError)
+	flags.SetOutput(stdout)
+	configPath := flags.String("config", "config.yaml", "path to config file")
+	runOnce := flags.Bool("run-once", false, "collect once and exit")
+	echo := flags.Bool("echo", false, "print metrics to stdout instead of publishing them")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
 	}
 
-	_ = levelVar // intentionally deferred until the SIGHUP/reload path lands in a later phase.
-
-	// Stub collector: no real backends exist yet, so nothing is collected.
-	collectFunc := func(ctx context.Context) ([]*monitor.Metric, error) {
-		return []*monitor.Metric{}, nil
+	var (
+		cfg *config.Config
+		err error
+	)
+	if *echo {
+		cfg, err = config.LoadConfigForEcho(*configPath)
+	} else {
+		cfg, err = config.LoadConfig(*configPath)
+	}
+	if err != nil {
+		fmt.Fprintf(stdout, "load config: %v\n", err)
+		return 1
 	}
 
-	opts := []monitor.Option{
-		monitor.WithConfig(monitor.DefaultConfig()),
+	logger, _ := monitor.NewLogger(cfg.LogLevel)
+	client := hnap.New(hnap.Config{
+		Host:        cfg.Modem.Host,
+		Username:    cfg.Modem.Username,
+		Password:    cfg.Modem.Password,
+		InsecureTLS: cfg.Modem.InsecureTLS,
+	})
+	modemCollector := collector.NewCollector(client, collector.Config{
+		Host:           cfg.Modem.Host,
+		ModemTag:       cfg.Modem.Host,
+		LockoutBackoff: cfg.Modem.LockoutBackoff,
+	}, logger)
+
+	influxBackend, elasticsearchBackend := buildBackends(cfg, *echo, stdout, logger)
+	monitorConfig := cfg.MonitorConfig()
+	if *runOnce {
+		// Keep the one-shot batch in the pipeline until its synchronous final
+		// flush. go-monitor v0.1.0 otherwise starts an untracked async flush
+		// when the default batch size is reached and can return too early.
+		monitorConfig.Global.BatchSize = 10_000
+	}
+	reloadFn := func(string) (*monitor.Config, error) {
+		var (
+			newCfg *config.Config
+			err    error
+		)
+		if *echo {
+			newCfg, err = config.LoadConfigForEcho(*configPath)
+		} else {
+			newCfg, err = config.LoadConfig(*configPath)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return newCfg.MonitorConfig(), nil
+	}
+
+	m, err := monitor.New("mb8611-poller", collector.MakeCollectFunc(modemCollector),
+		monitor.WithConfig(monitorConfig),
 		monitor.WithLogger(logger),
 		monitor.WithRunOnce(*runOnce),
-		// Echo is wired unconditionally (the --echo flag value is not yet
-		// consulted) until Phase 6 adds real backends: go-monitor errors
-		// with "no backends configured" otherwise.
-		monitor.WithEcho(true),
-	}
-
-	m, err := monitor.New("mb8611-poller", collectFunc, opts...)
+		monitor.WithBackend(influxBackend),
+		monitor.WithBackend(elasticsearchBackend),
+		monitor.WithReloadFunc(reloadFn),
+	)
 	if err != nil {
-		slog.Error("failed to initialize monitor", "error", err)
-		os.Exit(1)
+		fmt.Fprintf(stdout, "initialize monitor: %v\n", err)
+		return 1
 	}
-
 	if err := m.Run(context.Background()); err != nil {
-		slog.Error("monitor exited with error", "error", err)
-		os.Exit(1)
+		logger.Error("monitor exited with error", "error", err)
+		fmt.Fprintf(stdout, "monitor: %v\n", err)
+		return 1
 	}
+	return 0
+}
+
+func buildBackends(cfg *config.Config, echo bool, stdout io.Writer, logger *slog.Logger) (monitor.Backend, monitor.Backend) {
+	var influxInner, elasticsearchInner monitor.Backend
+	if echo {
+		influxInner = monitor.NewEcho(stdout, logger)
+		elasticsearchInner = monitor.NewEcho(stdout, logger)
+	} else {
+		influxInner = influxdb.New(cfg.InfluxBackendConfig(), logger)
+		elasticsearchInner = elasticsearch.New(cfg.ESBackendConfig(), logger)
+	}
+	return &monitor.MeasurementFilter{Inner: influxInner, Include: cfg.Routing.InfluxDBInclude},
+		&monitor.MeasurementFilter{Inner: elasticsearchInner, Include: cfg.Routing.ElasticsearchInclude}
 }

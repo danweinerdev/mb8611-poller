@@ -71,6 +71,17 @@ type RoutingConfig struct {
 // LoadConfig reads, applies environment overrides to, defaults, and validates
 // the configuration at path.
 func LoadConfig(path string) (*Config, error) {
+	return loadConfigWithBackendValidation(path, true)
+}
+
+// LoadConfigForEcho reads configuration for echo mode. Echo replaces the
+// production backends, so their enabled connection settings are not required.
+// Modem and runtime settings are validated normally.
+func LoadConfigForEcho(path string) (*Config, error) {
+	return loadConfigWithBackendValidation(path, false)
+}
+
+func loadConfigWithBackendValidation(path string, validateBackends bool) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -100,7 +111,7 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Routing.ElasticsearchInclude = append([]string(nil), defaultElasticsearchInclude...)
 	}
 
-	if err := validate(&cfg); err != nil {
+	if err := validate(&cfg, validateBackends); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -156,7 +167,7 @@ func applyEnvOverrides(cfg *Config) {
 	}
 }
 
-func validate(cfg *Config) error {
+func validate(cfg *Config, validateBackends bool) error {
 	var errs monitor.ValidationErrors
 
 	if strings.TrimSpace(cfg.Modem.Host) == "" {
@@ -165,7 +176,7 @@ func validate(cfg *Config) error {
 	if strings.TrimSpace(cfg.Modem.Password) == "" {
 		errs = append(errs, monitor.ValidationError{Field: "modem.password", Message: "must not be empty"})
 	}
-	if cfg.InfluxDB.Enabled {
+	if validateBackends && cfg.InfluxDB.Enabled {
 		if strings.TrimSpace(cfg.InfluxDB.URL) == "" {
 			errs = append(errs, monitor.ValidationError{Field: "influxdb.url", Message: "must not be empty when enabled"})
 		}
@@ -179,7 +190,7 @@ func validate(cfg *Config) error {
 			errs = append(errs, monitor.ValidationError{Field: "influxdb.bucket", Message: "must not be empty when enabled"})
 		}
 	}
-	if cfg.Elasticsearch.Enabled {
+	if validateBackends && cfg.Elasticsearch.Enabled {
 		if strings.TrimSpace(cfg.Elasticsearch.URL) == "" {
 			errs = append(errs, monitor.ValidationError{Field: "elasticsearch.url", Message: "must not be empty when enabled"})
 		}

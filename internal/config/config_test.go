@@ -146,6 +146,27 @@ func TestLoadConfigValidation(t *testing.T) {
 	}
 }
 
+func TestLoadConfigForEchoSkipsOnlyBackendValidation(t *testing.T) {
+	config := strings.Replace(strings.Replace(strings.Replace(strings.Replace(strings.Replace(strings.Replace(strings.Replace(strings.Replace(validYAML,
+		"url: http://influx.example:8086", "url: ''", 1),
+		"token: influx-token", "token: ''", 1),
+		"org: home", "org: ''", 1),
+		"bucket: modem", "bucket: ''", 1),
+		"url: https://es.example:9200", "url: ''", 1),
+		"index: mb8611-events", "index: ''", 1),
+		"api_key: es-key", "api_key: ''", 1),
+		"username: es-user", "username: ''", 1)
+	if _, err := LoadConfigForEcho(writeConfig(t, config)); err != nil {
+		t.Fatalf("LoadConfigForEcho() error = %v", err)
+	}
+
+	config = strings.Replace(config, "interval: 45s", "interval: 0s", 1)
+	_, err := LoadConfigForEcho(writeConfig(t, config))
+	if err == nil || !strings.Contains(err.Error(), "interval:") {
+		t.Fatalf("LoadConfigForEcho() error = %v, want interval validation error", err)
+	}
+}
+
 func TestLoadConfigEnvOverrides(t *testing.T) {
 	tests := []struct {
 		name  string
