@@ -89,7 +89,6 @@ func loadConfigWithBackendValidation(path string, validateBackends bool) (*Confi
 
 	cfg := Config{
 		Modem: ModemConfig{
-			InsecureTLS:    true,
 			LockoutBackoff: defaultLockoutBackoff,
 		},
 	}

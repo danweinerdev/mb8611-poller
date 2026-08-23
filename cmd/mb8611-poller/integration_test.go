@@ -33,6 +33,7 @@ func TestRunEchoOnceIntegration(t *testing.T) {
   host: %q
   username: admin
   password: test
+  insecure_tls: true
 interval: 1m
 log_level: info
 influxdb:

@@ -35,6 +35,7 @@ func TestRunEchoOnce(t *testing.T) {
 		"  host: " + serverURL.Host + "\n" +
 		"  username: admin\n" +
 		"  password: secret\n" +
+		"  insecure_tls: true\n" +
 		"interval: 1m\n" +
 		"hostname: poller-host\n" +
 		"log_level: info\n" +

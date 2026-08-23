@@ -98,7 +98,7 @@ log_level: info
 	if cfg.Hostname != hostname {
 		t.Fatalf("hostname = %q, want %q", cfg.Hostname, hostname)
 	}
-	if !cfg.Modem.InsecureTLS || cfg.Modem.LockoutBackoff != defaultLockoutBackoff {
+	if cfg.Modem.InsecureTLS || cfg.Modem.LockoutBackoff != defaultLockoutBackoff {
 		t.Fatalf("unexpected modem defaults: %#v", cfg.Modem)
 	}
 	if got := strings.Join(cfg.Routing.InfluxDBInclude, ","); got != "docsis_downstream,docsis_upstream,docsis_modem" {
