@@ -117,6 +117,7 @@ func TestLoadConfigValidation(t *testing.T) {
 	}{
 		{name: "empty modem host", yaml: strings.Replace(validYAML, "host: modem.example", "host: ''", 1), field: "modem.host"},
 		{name: "empty modem password", yaml: strings.Replace(validYAML, "password: modem-password", "password: ''", 1), field: "modem.password"},
+		{name: "non-positive lockout backoff", yaml: strings.Replace(validYAML, "lockout_backoff: 7m", "lockout_backoff: 0s", 1), field: "modem.lockout_backoff"},
 		{name: "missing influx URL", yaml: strings.Replace(validYAML, "url: http://influx.example:8086", "url: ''", 1), field: "influxdb.url"},
 		{name: "missing influx token", yaml: strings.Replace(validYAML, "token: influx-token", "token: ''", 1), field: "influxdb.token"},
 		{name: "missing influx org", yaml: strings.Replace(validYAML, "org: home", "org: ''", 1), field: "influxdb.org"},

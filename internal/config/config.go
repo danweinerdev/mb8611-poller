@@ -175,6 +175,9 @@ func validate(cfg *Config, validateBackends bool) error {
 	if strings.TrimSpace(cfg.Modem.Password) == "" {
 		errs = append(errs, monitor.ValidationError{Field: "modem.password", Message: "must not be empty"})
 	}
+	if cfg.Modem.LockoutBackoff <= 0 {
+		errs = append(errs, monitor.ValidationError{Field: "modem.lockout_backoff", Message: "must be greater than zero"})
+	}
 	if validateBackends && cfg.InfluxDB.Enabled {
 		if strings.TrimSpace(cfg.InfluxDB.URL) == "" {
 			errs = append(errs, monitor.ValidationError{Field: "influxdb.url", Message: "must not be empty when enabled"})
