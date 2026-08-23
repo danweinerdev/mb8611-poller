@@ -204,4 +204,31 @@ func (c *client) setLoginCookie(value string) {
 func loginPayload(user, password, action string) map[string]any {
 	return map[string]any{"Login": map[string]string{"Action": action, "Username": user, "LoginPassword": password, "Captcha": "", "PrivateLogin": "LoginPassword"}}
 }
-func isUnauth(raw json.RawMessage) bool { return bytes.Contains(raw, []byte(`"UN-AUTH"`)) }
+func isUnauth(raw json.RawMessage) bool {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	return containsUnauthResult(value)
+}
+
+func containsUnauthResult(value any) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if strings.HasSuffix(key, "Result") && child == "UN-AUTH" {
+				return true
+			}
+			if containsUnauthResult(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if containsUnauthResult(child) {
+				return true
+			}
+		}
+	}
+	return false
+}

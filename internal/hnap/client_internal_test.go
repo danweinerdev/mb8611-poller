@@ -20,3 +20,12 @@ func TestNewUsesLoginBootstrapKeyAndJSONCookie(t *testing.T) {
 		t.Fatalf("cookies = %#v", cookies)
 	}
 }
+
+func TestIsUnauthOnlyMatchesResultFields(t *testing.T) {
+	if !isUnauth([]byte(`{"CallResponse":{"CallResult":"UN-AUTH"}}`)) {
+		t.Fatal("result field was not detected")
+	}
+	if isUnauth([]byte(`{"message":"UN-AUTH","LogResponse":{"LogResult":"OK"}}`)) {
+		t.Fatal("payload text triggered false reauthentication")
+	}
+}
