@@ -140,7 +140,9 @@ On the target host, create the dedicated system user before installing. The
 install target deliberately does not create it so operators can choose a UID.
 It installs the binary and unit, copies `config.yaml.example` to
 `/etc/mb8611-poller/config.yaml` only when that file does not already exist,
-and reloads systemd:
+sets existing or new config ownership to `root:mb8611-poller` with mode `0640`
+so the service can read it without exposing it to other users, and reloads
+systemd:
 
 ```sh
 sudo useradd --system mb8611-poller

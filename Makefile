@@ -5,6 +5,7 @@ GOFLAGS := -trimpath -ldflags="-s -w"
 .PHONY: build test lint verify clean install fixtures
 
 build:
+	install -d $(BUILD_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/mb8611-poller
 
 test:
@@ -31,7 +32,9 @@ clean:
 install: build
 	install -d /usr/local/bin /etc/mb8611-poller /etc/systemd/system
 	install -m 755 $(BUILD_DIR)/$(BINARY) /usr/local/bin/$(BINARY)
-	test -f /etc/mb8611-poller/config.yaml || install -o mb8611-poller -g mb8611-poller -m 600 config.yaml.example /etc/mb8611-poller/config.yaml
+	test -f /etc/mb8611-poller/config.yaml || install -o root -g mb8611-poller -m 640 config.yaml.example /etc/mb8611-poller/config.yaml
+	chown root:mb8611-poller /etc/mb8611-poller/config.yaml
+	chmod 640 /etc/mb8611-poller/config.yaml
 	install -m 644 mb8611-poller.service /etc/systemd/system/mb8611-poller.service
 	systemctl daemon-reload
 
