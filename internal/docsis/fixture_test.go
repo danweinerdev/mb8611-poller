@@ -23,3 +23,20 @@ func downstreamFixture(t *testing.T) string {
 	}
 	return response.MotoConnDownstreamChannel
 }
+
+func eventLogFixture(t *testing.T) string {
+	t.Helper()
+
+	contents, err := os.ReadFile(filepath.Join("..", "hnap", "hnaptest", "testdata", "GetMotoStatusLog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var response struct {
+		MotoStatusLogList string
+	}
+	if err := json.Unmarshal(contents, &response); err != nil {
+		t.Fatal(err)
+	}
+	return response.MotoStatusLogList
+}

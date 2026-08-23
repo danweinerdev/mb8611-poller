@@ -24,3 +24,11 @@ type UpstreamChannel struct {
 	FreqMHz      float64
 	PowerDBmV    float64
 }
+
+// EventEntry is one row from MotoStatusLogList.
+type EventEntry struct {
+	Date     string
+	Time     string
+	Severity string
+	Message  string
+}
