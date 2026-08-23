@@ -47,6 +47,7 @@ type serverState struct {
 	challengeIssued  bool
 	authenticated    bool
 	authenticatedOps int
+	forceUnauthUsed  bool
 	stats            ServerStats
 }
 
@@ -184,7 +185,8 @@ func (s *serverState) call(w http.ResponseWriter, r *http.Request, request map[s
 
 	s.authenticatedOps++
 	s.stats.Calls[action]++
-	if s.cfg.ForceUnauthAfter > 0 && s.authenticatedOps == s.cfg.ForceUnauthAfter {
+	if s.cfg.ForceUnauthAfter > 0 && !s.forceUnauthUsed && s.authenticatedOps == s.cfg.ForceUnauthAfter {
+		s.forceUnauthUsed = true
 		s.authenticated = false
 		s.writeUnauth(w, action)
 		return
