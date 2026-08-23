@@ -2,13 +2,21 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	monitor "github.com/danweinerdev/go-monitor"
+	"github.com/danweinerdev/mb8611-poller/internal/config"
 	"github.com/danweinerdev/mb8611-poller/internal/hnap/hnaptest"
 )
 
@@ -45,6 +53,128 @@ func TestRunEchoOnce(t *testing.T) {
 		if !strings.Contains(output.String(), measurement) {
 			t.Errorf("echo output missing %q:\n%s", measurement, output.String())
 		}
+	}
+}
+
+func TestReloadFuncUpdatesRuntimeConfig(t *testing.T) {
+	_, levelVar := monitor.NewLogger("info")
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	want := &config.Config{
+		Interval: 2 * time.Minute,
+		LogLevel: "debug",
+	}
+	loads := 0
+	reloadFn := newReloadFunc(configPath, func(path string) (*config.Config, error) {
+		loads++
+		if path != configPath {
+			t.Errorf("reload config path = %q, want %q", path, configPath)
+		}
+		return want, nil
+	}, levelVar)
+
+	got, err := reloadFn("ignored-by-go-monitor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loads != 1 {
+		t.Fatalf("config loads = %d, want 1", loads)
+	}
+	if got.Global.PollInterval.Duration != want.Interval {
+		t.Errorf("poll interval = %s, want %s", got.Global.PollInterval.Duration, want.Interval)
+	}
+	if got.Global.LogLevel != want.LogLevel {
+		t.Errorf("log level = %q, want %q", got.Global.LogLevel, want.LogLevel)
+	}
+	if got := levelVar.Level(); got != slog.LevelDebug {
+		t.Errorf("running log level = %s, want %s", got, slog.LevelDebug)
+	}
+}
+
+func TestReloadDoesNotChangeRunningElasticsearchBackend(t *testing.T) {
+	var originalWrites, reloadedRequests int
+	originalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "_bulk") {
+			originalWrites++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Elastic-Product", "Elasticsearch")
+		_, _ = w.Write([]byte(`{"errors":false,"items":[{"index":{"status":201}}]}`))
+	}))
+	defer originalServer.Close()
+	reloadedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reloadedRequests++
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Elastic-Product", "Elasticsearch")
+		_, _ = w.Write([]byte(`{"errors":false,"items":[{"index":{"status":201}}]}`))
+	}))
+	defer reloadedServer.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	writeReloadConfig(t, configPath, originalServer.URL, "1m", "info")
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger, levelVar := monitor.NewLogger(cfg.LogLevel)
+	_, elasticsearchBackend := buildBackends(cfg, false, nil, logger)
+	filter, ok := elasticsearchBackend.(*monitor.MeasurementFilter)
+	if !ok {
+		t.Fatalf("Elasticsearch backend type = %T, want *monitor.MeasurementFilter", elasticsearchBackend)
+	}
+	runningBackend := filter.Inner
+
+	writeReloadConfig(t, configPath, reloadedServer.URL, "2m", "warn")
+	reloadFn := newReloadFunc(configPath, config.LoadConfig, levelVar)
+	reloadedMonitorConfig, err := reloadFn("ignored-by-go-monitor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloadedMonitorConfig.Global.PollInterval.Duration; got != 2*time.Minute {
+		t.Errorf("reloaded poll interval = %s, want 2m", got)
+	}
+	if got := levelVar.Level(); got != slog.LevelWarn {
+		t.Errorf("running log level = %s, want %s", got, slog.LevelWarn)
+	}
+	if filter.Inner != runningBackend {
+		t.Error("reload replaced the running Elasticsearch backend")
+	}
+
+	if err := filter.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := filter.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := filter.Write(context.Background(), []*monitor.Metric{
+		monitor.NewMetric("docsis_event").WithField("message", "test"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if originalWrites != 1 {
+		t.Errorf("writes to original Elasticsearch URL = %d, want 1", originalWrites)
+	}
+	if reloadedRequests != 0 {
+		t.Errorf("requests to reloaded Elasticsearch URL = %d, want 0", reloadedRequests)
+	}
+}
+
+func writeReloadConfig(t *testing.T, path, elasticsearchURL, interval, logLevel string) {
+	t.Helper()
+	contents := fmt.Sprintf(`modem:
+  host: modem.example
+  password: secret
+interval: %s
+log_level: %s
+elasticsearch:
+  enabled: true
+  url: %q
+  index: events
+  api_key: test-key
+`, interval, logLevel, elasticsearchURL)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

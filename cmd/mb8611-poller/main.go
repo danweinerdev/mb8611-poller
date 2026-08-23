@@ -51,7 +51,7 @@ func run(args []string, stdout io.Writer) int {
 		return 1
 	}
 
-	logger, _ := monitor.NewLogger(cfg.LogLevel)
+	logger, levelVar := monitor.NewLogger(cfg.LogLevel)
 	client := hnap.New(hnap.Config{
 		Host:        cfg.Modem.Host,
 		Username:    cfg.Modem.Username,
@@ -72,21 +72,11 @@ func run(args []string, stdout io.Writer) int {
 		// when the default batch size is reached and can return too early.
 		monitorConfig.Global.BatchSize = 10_000
 	}
-	reloadFn := func(string) (*monitor.Config, error) {
-		var (
-			newCfg *config.Config
-			err    error
-		)
-		if *echo {
-			newCfg, err = config.LoadConfigForEcho(*configPath)
-		} else {
-			newCfg, err = config.LoadConfig(*configPath)
-		}
-		if err != nil {
-			return nil, err
-		}
-		return newCfg.MonitorConfig(), nil
+	loadConfig := config.LoadConfig
+	if *echo {
+		loadConfig = config.LoadConfigForEcho
 	}
+	reloadFn := newReloadFunc(*configPath, loadConfig, levelVar)
 
 	m, err := monitor.New("mb8611-poller", collector.MakeCollectFunc(modemCollector),
 		monitor.WithConfig(monitorConfig),
@@ -106,6 +96,20 @@ func run(args []string, stdout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// newReloadFunc reloads runtime monitor settings from configPath. The path
+// supplied by go-monitor is empty when WithConfig is used, so it must not be
+// used here. Backend, HNAP, and routing objects are intentionally not rebuilt.
+func newReloadFunc(configPath string, loadConfig func(string) (*config.Config, error), levelVar *slog.LevelVar) func(string) (*monitor.Config, error) {
+	return func(string) (*monitor.Config, error) {
+		cfg, err := loadConfig(configPath)
+		if err != nil {
+			return nil, err
+		}
+		levelVar.Set(monitor.ParseLogLevel(cfg.LogLevel))
+		return cfg.MonitorConfig(), nil
+	}
 }
 
 func buildBackends(cfg *config.Config, echo bool, stdout io.Writer, logger *slog.Logger) (monitor.Backend, monitor.Backend) {

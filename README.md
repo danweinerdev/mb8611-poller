@@ -6,9 +6,8 @@ Elasticsearch. It is built on the shared
 [`go-monitor`](https://github.com/danweinerdev/go-monitor) library, which
 provides the collection loop, logging, and backend wiring.
 
-> Status: bootstrap. The CLI surface and `go-monitor` wiring are in place, but
-> real HNAP collection and the InfluxDB/Elasticsearch backends arrive in later
-> phases.
+> Status: active development. HNAP collection and the routed
+> InfluxDB/Elasticsearch backend wiring are available.
 
 ## Quickstart
 
@@ -16,9 +15,18 @@ provides the collection loop, logging, and backend wiring.
 make build && ./bin/mb8611-poller --echo --run-once --config config.yaml
 ```
 
-`config.yaml` is accepted on the command line but is not consumed yet — config
-loading lands in a later phase. The stub parses the flag and runs the
-`go-monitor` loop once with echo output.
+The daemon reads the YAML configuration named by `--config`; environment
+variables with the `MB8611_` prefix override its values. `--echo` writes the
+normally routed metrics to standard output instead of connecting to InfluxDB
+or Elasticsearch.
+
+## Configuration reloads
+
+Send `SIGHUP` to reload the YAML configuration and apply environment
+overrides. Only `interval` and `log_level` take effect in the running daemon.
+Changes to `modem.*`, `influxdb.*`, `elasticsearch.*`, or `routing.*` require
+a daemon restart; existing HNAP and backend connections are not rebuilt on
+reload.
 
 ## Building
 
