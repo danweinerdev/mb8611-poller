@@ -28,11 +28,12 @@ verify:
 clean:
 	rm -rf $(BUILD_DIR) coverage.out coverage.html
 
-# Minimal binary install. The systemd unit + config-file install belongs to
-# Phase 7; do not add that logic here.
 install: build
-	install -d /usr/local/bin
+	install -d /usr/local/bin /etc/mb8611-poller /etc/systemd/system
 	install -m 755 $(BUILD_DIR)/$(BINARY) /usr/local/bin/$(BINARY)
+	test -f /etc/mb8611-poller/config.yaml || install -m 600 config.yaml.example /etc/mb8611-poller/config.yaml
+	install -m 644 mb8611-poller.service /etc/systemd/system/mb8611-poller.service
+	systemctl daemon-reload
 
 # Requires a reachable modem and credentials supplied only through the environment.
 # Example: MB8611_MODEM_HOST=... MB8611_MODEM_USERNAME=... MB8611_MODEM_PASSWORD=... make fixtures

@@ -66,8 +66,8 @@ variables are used as supplied and then validated with the resulting config.
 
 For systemd deployments, keep secrets in `/etc/mb8611-poller/env` with mode
 `0600` and use the intended `EnvironmentFile=-/etc/mb8611-poller/env` unit
-setting. The Phase 7.1 unit is not yet implemented in this checkout; this is
-the intended path, not an installation that has been tested here.
+setting. The installed unit loads this file when it exists, so credentials stay
+out of the YAML configuration.
 
 | Variable | Overrides |
 | --- | --- |
@@ -127,14 +127,13 @@ index and wastes indexing resources.
 
 ## Operations
 
-### Intended systemd deployment
+### systemd deployment
 
-Phase 7.1 is not yet implemented. Its planned repository unit file is
-`mb8611-poller.service`; its intended installed unit path is
-`/etc/systemd/system/mb8611-poller.service`, its intended config path is
-`/etc/mb8611-poller/config.yaml`, and its intended binary path is
-`/usr/local/bin/mb8611-poller`. Do not treat the following target-host steps as
-installation verification for this checkout:
+On the target host, create the dedicated system user before installing. The
+install target deliberately does not create it so operators can choose a UID.
+It installs the binary and unit, copies `config.yaml.example` to
+`/etc/mb8611-poller/config.yaml` only when that file does not already exist,
+and reloads systemd:
 
 ```sh
 sudo useradd --system mb8611-poller
@@ -144,9 +143,21 @@ sudo systemctl enable --now mb8611-poller
 sudo journalctl -u mb8611-poller -f
 ```
 
-`make install` currently installs only the binary; the config and unit-file
-installation described above await Phase 7.1. On a development host without
-root or systemd, run the Quickstart command directly instead.
+Create `/etc/mb8611-poller/env` with mode `0600` for secrets such as
+`MB8611_MODEM_PASSWORD`, `MB8611_INFLUXDB_TOKEN`, and `MB8611_ES_API_KEY`.
+The `EnvironmentFile` prefix permits the service to start if that file is
+absent, which is useful for initial `--echo` validation.
+
+`make install` requires root (or `sudo`), and its `systemctl` command requires
+a systemd host. On a development machine without either, do not run the
+install target; validate directly instead:
+
+```sh
+./bin/mb8611-poller --config config.yaml --echo --run-once
+```
+
+The systemd path is manually verified on the target deployment host, not in
+CI.
 
 ### Reload and restart boundaries
 

@@ -1,0 +1,21 @@
+[Unit]
+Description=Motorola MB8611 status poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mb8611-poller
+Group=mb8611-poller
+EnvironmentFile=-/etc/mb8611-poller/env
+ExecStart=/usr/local/bin/mb8611-poller --config /etc/mb8611-poller/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=
+
+[Install]
+WantedBy=multi-user.target
