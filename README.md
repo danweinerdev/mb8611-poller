@@ -108,9 +108,16 @@ grant only the index privileges required by the Elasticsearch deployment. API
 keys are generally preferable to long-lived basic-auth passwords.
 
 Set `elasticsearch.id_from_tag: doc_id` to use the event's stable ID for
-idempotent writes. The optional index template planned in Phase 7.3 would live
-at `index-template.json`; it is not present yet, and its installation has not
-been tested by this task.
+idempotent writes.
+
+#### Pre-create ES index
+
+Install the optional event index template before Elasticsearch creates the
+index:
+
+```sh
+curl -X PUT https://es.lan:9200/_index_template/mb8611-events -H 'Content-Type: application/json' --data-binary @index-template.json
+```
 
 ## Routing
 
@@ -204,10 +211,8 @@ self-signed Elasticsearch deployment requires the explicit opt-in.
 
 ## Legacy
 
-Phase 7.3 is not yet implemented. It is planned to add a deprecation marker
-to the repository-root `poller.py`, which remains only as a protocol reference
-and is not a supported deployment path. The same task plans the optional
-repository-root `index-template.json` described in the Elasticsearch section.
+The repository-root `poller.py` is deprecated and retained for protocol
+reference only; it is not a supported deployment path.
 
 ## Development
 

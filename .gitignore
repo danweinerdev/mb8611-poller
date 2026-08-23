@@ -24,4 +24,3 @@ coverage.html
 
 # Local reference/credential files; never commit modem secrets.
 /DO_NOT_COMMIT.txt
-/poller.py

@@ -1,0 +1,21 @@
+{
+  "index_patterns": ["mb8611-events*"],
+  "template": {
+    "mappings": {
+      "properties": {
+        "@timestamp": {"type": "date"},
+        "measurement": {"type": "keyword"},
+        "host": {"type": "keyword"},
+        "modem": {"type": "keyword"},
+        "severity": {"type": "keyword"},
+        "doc_id": {"type": "keyword"},
+        "raw_date": {"type": "keyword"},
+        "raw_time": {"type": "keyword"},
+        "message": {
+          "type": "text",
+          "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}
+        }
+      }
+    }
+  }
+}
