@@ -52,6 +52,7 @@ func run(args []string, stdout io.Writer) int {
 	}
 
 	logger, levelVar := monitor.NewLogger(cfg.LogLevel)
+	slog.SetDefault(logger)
 	client := hnap.New(hnap.Config{
 		Host:        cfg.Modem.Host,
 		Username:    cfg.Modem.Username,
