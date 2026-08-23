@@ -29,7 +29,8 @@ verify:
 clean:
 	rm -rf $(BUILD_DIR) coverage.out coverage.html
 
-install: build
+install:
+	@test -x $(BUILD_DIR)/$(BINARY) || (echo "$(BUILD_DIR)/$(BINARY) is missing; run 'make build' as your normal user first" >&2; exit 2)
 	install -d /usr/local/bin /etc/mb8611-poller /etc/systemd/system
 	install -m 755 $(BUILD_DIR)/$(BINARY) /usr/local/bin/$(BINARY)
 	test -f /etc/mb8611-poller/config.yaml || install -o root -g mb8611-poller -m 640 config.yaml.example /etc/mb8611-poller/config.yaml
