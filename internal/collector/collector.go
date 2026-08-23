@@ -63,17 +63,39 @@ func NewCollector(client hnap.Client, cfg Config, logger *slog.Logger) *Collecto
 // MakeCollectFunc returns a function that performs one modem poll.
 func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 	return func(ctx context.Context) ([]*monitor.Metric, error) {
+		c.mu.Lock()
+		now := c.clock()
+		if now.Before(c.lockoutUntil) {
+			remaining := c.lockoutUntil.Sub(now)
+			c.mu.Unlock()
+			c.logger.Warn("skipping poll during lockout cooldown", "remaining", remaining)
+			return nil, nil
+		}
+		c.mu.Unlock()
+
 		if err := c.client.EnsureLogin(ctx); err != nil {
 			if errors.Is(err, hnap.ErrLockedOut) {
+				enteredCooldown := false
 				c.mu.Lock()
-				until := c.clock().Add(c.cfg.LockoutBackoff)
-				c.lockoutUntil = until
+				now := c.clock()
+				until := c.lockoutUntil
+				if now.After(c.lockoutUntil) {
+					until = now.Add(c.cfg.LockoutBackoff)
+					c.lockoutUntil = until
+					enteredCooldown = true
+				}
 				c.mu.Unlock()
-				c.logger.Warn("modem lockout detected", "until", until)
+				if enteredCooldown {
+					c.logger.Warn("modem lockout detected, entering cooldown", "until", until)
+				}
 				return nil, nil
 			}
 			return nil, err
 		}
+
+		c.mu.Lock()
+		c.lockoutUntil = time.Time{}
+		c.mu.Unlock()
 
 		responses, err := c.client.Multi(ctx,
 			downstreamAction,

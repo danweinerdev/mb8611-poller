@@ -79,24 +79,90 @@ func TestNewCollectorDefaultsModemTag(t *testing.T) {
 	if got, want := collector.cfg.ModemTag, "192.168.100.1"; got != want {
 		t.Errorf("default modem tag = %q, want %q", got, want)
 	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.clock == nil {
+		t.Error("default clock is nil")
+	}
 }
 
-func TestMakeCollectFuncLockedOutSetsDeadline(t *testing.T) {
+func TestMakeCollectFuncLockoutCooldownSkipsHNAPAndRecovers(t *testing.T) {
 	now := time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)
-	collector := NewCollector(hnaptest.NewMockClient(), Config{LockoutBackoff: 6 * time.Minute}, slog.Default())
-	collector.clock = func() time.Time { return now }
-	collector.client.(*hnaptest.MockClient).LockedOut = true
+	backoff := 6 * time.Minute
+	mock := fixtureClient()
+	mock.LockedOut = true
+	collector := NewCollector(mock, Config{LockoutBackoff: backoff}, slog.Default())
+	setCollectorClock(collector, func() time.Time { return now })
+	collect := MakeCollectFunc(collector)
 
-	metrics, err := MakeCollectFunc(collector)(context.Background())
+	metrics, err := collect(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if metrics != nil {
 		t.Errorf("metrics = %v, want nil", metrics)
 	}
-	if got, want := collector.lockoutUntil, now.Add(6*time.Minute); !got.Equal(want) {
+	deadline := lockoutDeadline(collector)
+	if got, want := deadline, now.Add(backoff); !got.Equal(want) {
 		t.Errorf("lockout deadline = %v, want %v", got, want)
 	}
+	assertNoHNAPTraffic(t, mock)
+
+	now = now.Add(backoff / 2)
+	metrics, err = collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics != nil {
+		t.Errorf("cooldown metrics = %v, want nil", metrics)
+	}
+	if got := lockoutDeadline(collector); !got.Equal(deadline) {
+		t.Errorf("lockout deadline was extended to %v, want original %v", got, deadline)
+	}
+	assertNoHNAPTraffic(t, mock)
+
+	now = deadline.Add(time.Nanosecond)
+	mock.LockedOut = false
+	metrics, err = collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) == 0 {
+		t.Error("post-cooldown metrics are empty")
+	}
+	if got := lockoutDeadline(collector); !got.IsZero() {
+		t.Errorf("lockout deadline after successful recovery = %v, want zero", got)
+	}
+	if got, want := mock.LoginCount, 1; got != want {
+		t.Errorf("post-cooldown login count = %d, want %d", got, want)
+	}
+	for _, action := range []string{downstreamAction, upstreamAction, connectionAction, softwareAction, startupAction, logAction} {
+		if got, want := mock.CallCounts[action], 1; got != want {
+			t.Errorf("post-cooldown call count for %q = %d, want %d", action, got, want)
+		}
+	}
+}
+
+func assertNoHNAPTraffic(t *testing.T, mock *hnaptest.MockClient) {
+	t.Helper()
+	if mock.LoginCount != 0 {
+		t.Errorf("login count = %d, want 0 during cooldown", mock.LoginCount)
+	}
+	if len(mock.CallCounts) != 0 {
+		t.Errorf("HNAP call counts = %v, want no calls during cooldown", mock.CallCounts)
+	}
+}
+
+func setCollectorClock(collector *Collector, clock func() time.Time) {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.clock = clock
+}
+
+func lockoutDeadline(collector *Collector) time.Time {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	return collector.lockoutUntil
 }
 
 func fixtureClient() *hnaptest.MockClient {
