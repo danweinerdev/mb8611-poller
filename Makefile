@@ -31,7 +31,7 @@ clean:
 install: build
 	install -d /usr/local/bin /etc/mb8611-poller /etc/systemd/system
 	install -m 755 $(BUILD_DIR)/$(BINARY) /usr/local/bin/$(BINARY)
-	test -f /etc/mb8611-poller/config.yaml || install -m 600 config.yaml.example /etc/mb8611-poller/config.yaml
+	test -f /etc/mb8611-poller/config.yaml || install -o mb8611-poller -g mb8611-poller -m 600 config.yaml.example /etc/mb8611-poller/config.yaml
 	install -m 644 mb8611-poller.service /etc/systemd/system/mb8611-poller.service
 	systemctl daemon-reload
 
