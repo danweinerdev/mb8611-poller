@@ -16,3 +16,11 @@ coverage.html
 
 # SDD lifecycle locks are operational state, not planning artifacts.
 *.sdd-lock
+
+# Codegraph related
+.code-graph/
+.code-graph.db
+
+# Local reference/credential files; never commit modem secrets.
+/DO_NOT_COMMIT.txt
+/poller.py
