@@ -1,4 +1,4 @@
-package hnap
+package hnap_test
 
 import (
 	"context"
@@ -6,12 +6,13 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/danweinerdev/mb8611-poller/internal/hnap"
 	"github.com/danweinerdev/mb8611-poller/internal/hnap/hnaptest"
 )
 
 func TestClientLoginAndMulti(t *testing.T) {
 	server := hnaptest.NewServer(t, hnaptest.ServerConfig{Password: "secret", Responses: map[string]json.RawMessage{"GetMotoStatusLog": json.RawMessage(`{"MotoStatusLogList":"entry"}`)}})
-	client := New(Config{Host: testHost(t, server.URL), Username: "admin", Password: "secret", InsecureTLS: true})
+	client := hnap.New(hnap.Config{Host: testHost(t, server.URL), Username: "admin", Password: "secret", InsecureTLS: true})
 	if err := client.EnsureLogin(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -35,18 +36,18 @@ func TestClientLoginAndMulti(t *testing.T) {
 
 func TestClientLoginFailureModes(t *testing.T) {
 	server := hnaptest.NewServer(t, hnaptest.ServerConfig{Password: "secret", FailedLoginsBeforeLockout: 1})
-	client := New(Config{Host: testHost(t, server.URL), Username: "admin", Password: "wrong", InsecureTLS: true})
-	if err := client.Login(context.Background()); err != ErrAuthFailed {
+	client := hnap.New(hnap.Config{Host: testHost(t, server.URL), Username: "admin", Password: "wrong", InsecureTLS: true})
+	if err := client.Login(context.Background()); err != hnap.ErrAuthFailed {
 		t.Fatalf("bad password = %v", err)
 	}
-	if err := client.Login(context.Background()); err != ErrLockedOut {
+	if err := client.Login(context.Background()); err != hnap.ErrLockedOut {
 		t.Fatalf("lockout = %v", err)
 	}
 }
 
 func TestClientRetriesOnceAfterUnauth(t *testing.T) {
 	server := hnaptest.NewServer(t, hnaptest.ServerConfig{Password: "secret", ForceUnauthAfter: 1})
-	client := New(Config{Host: testHost(t, server.URL), Username: "admin", Password: "secret", InsecureTLS: true})
+	client := hnap.New(hnap.Config{Host: testHost(t, server.URL), Username: "admin", Password: "secret", InsecureTLS: true})
 	if err := client.EnsureLogin(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -64,13 +65,13 @@ func TestClientRetriesOnceAfterUnauth(t *testing.T) {
 
 func TestClientUsesHNAP1AndLogoutResetsSession(t *testing.T) {
 	server := hnaptest.NewServer(t, hnaptest.ServerConfig{Password: "secret", PathPrefix: "/HNAP/"})
-	client := New(Config{Host: testHost(t, server.URL), Username: "admin", Password: "secret", InsecureTLS: true})
+	client := hnap.New(hnap.Config{Host: testHost(t, server.URL), Username: "admin", Password: "secret", InsecureTLS: true})
 	if err := client.EnsureLogin(context.Background()); err == nil {
 		t.Fatal("EnsureLogin unexpectedly accepted /HNAP1/ against a /HNAP/ server")
 	}
 
 	server = hnaptest.NewServer(t, hnaptest.ServerConfig{Password: "secret"})
-	client = New(Config{Host: testHost(t, server.URL), Username: "admin", Password: "secret", InsecureTLS: true})
+	client = hnap.New(hnap.Config{Host: testHost(t, server.URL), Username: "admin", Password: "secret", InsecureTLS: true})
 	if err := client.EnsureLogin(context.Background()); err != nil {
 		t.Fatal(err)
 	}
