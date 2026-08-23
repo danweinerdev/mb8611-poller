@@ -59,12 +59,16 @@ func run(args []string, stdout io.Writer) int {
 		InsecureTLS: cfg.Modem.InsecureTLS,
 	})
 	modemCollector := collector.NewCollector(client, collector.Config{
-		Host:           cfg.Modem.Host,
+		Host:           cfg.Hostname,
 		ModemTag:       cfg.Modem.Host,
 		LockoutBackoff: cfg.Modem.LockoutBackoff,
 	}, logger)
 
-	influxBackend, elasticsearchBackend := buildBackends(cfg, *echo, stdout, logger)
+	backends, err := buildBackends(cfg, *echo, stdout, logger)
+	if err != nil {
+		fmt.Fprintf(stdout, "build backends: %v\n", err)
+		return 1
+	}
 	monitorConfig := cfg.MonitorConfig()
 	if *runOnce {
 		// Keep the one-shot batch in the pipeline until its synchronous final
@@ -78,14 +82,16 @@ func run(args []string, stdout io.Writer) int {
 	}
 	reloadFn := newReloadFunc(*configPath, loadConfig, levelVar)
 
-	m, err := monitor.New("mb8611-poller", collector.MakeCollectFunc(modemCollector),
+	options := []monitor.Option{
 		monitor.WithConfig(monitorConfig),
 		monitor.WithLogger(logger),
 		monitor.WithRunOnce(*runOnce),
-		monitor.WithBackend(influxBackend),
-		monitor.WithBackend(elasticsearchBackend),
 		monitor.WithReloadFunc(reloadFn),
-	)
+	}
+	for _, backend := range backends {
+		options = append(options, monitor.WithBackend(backend))
+	}
+	m, err := monitor.New("mb8611-poller", collector.MakeCollectFunc(modemCollector), options...)
 	if err != nil {
 		fmt.Fprintf(stdout, "initialize monitor: %v\n", err)
 		return 1
@@ -112,15 +118,25 @@ func newReloadFunc(configPath string, loadConfig func(string) (*config.Config, e
 	}
 }
 
-func buildBackends(cfg *config.Config, echo bool, stdout io.Writer, logger *slog.Logger) (monitor.Backend, monitor.Backend) {
-	var influxInner, elasticsearchInner monitor.Backend
+func buildBackends(cfg *config.Config, echo bool, stdout io.Writer, logger *slog.Logger) ([]monitor.Backend, error) {
+	var backends []monitor.Backend
 	if echo {
-		influxInner = monitor.NewEcho(stdout, logger)
-		elasticsearchInner = monitor.NewEcho(stdout, logger)
+		backends = append(backends,
+			&monitor.MeasurementFilter{Inner: monitor.NewEcho(stdout, logger), Include: cfg.Routing.InfluxDBInclude},
+			&monitor.MeasurementFilter{Inner: monitor.NewEcho(stdout, logger), Include: cfg.Routing.ElasticsearchInclude},
+		)
 	} else {
-		influxInner = influxdb.New(cfg.InfluxBackendConfig(), logger)
-		elasticsearchInner = elasticsearch.New(cfg.ESBackendConfig(), logger)
+		if cfg.InfluxDB.Enabled {
+			backends = append(backends, &monitor.MeasurementFilter{Inner: influxdb.New(cfg.InfluxBackendConfig(), logger), Include: cfg.Routing.InfluxDBInclude})
+		}
+		if cfg.Elasticsearch.Enabled {
+			backends = append(backends, &monitor.MeasurementFilter{Inner: elasticsearch.New(cfg.ESBackendConfig(), logger), Include: cfg.Routing.ElasticsearchInclude})
+		}
 	}
-	return &monitor.MeasurementFilter{Inner: influxInner, Include: cfg.Routing.InfluxDBInclude},
-		&monitor.MeasurementFilter{Inner: elasticsearchInner, Include: cfg.Routing.ElasticsearchInclude}
+	for _, backend := range backends {
+		if err := backend.(*monitor.MeasurementFilter).Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return backends, nil
 }

@@ -36,6 +36,7 @@ func TestRunEchoOnce(t *testing.T) {
 		"  username: admin\n" +
 		"  password: secret\n" +
 		"interval: 1m\n" +
+		"hostname: poller-host\n" +
 		"log_level: info\n" +
 		"influxdb:\n" +
 		"  enabled: true\n" +
@@ -53,6 +54,31 @@ func TestRunEchoOnce(t *testing.T) {
 		if !strings.Contains(output.String(), measurement) {
 			t.Errorf("echo output missing %q:\n%s", measurement, output.String())
 		}
+	}
+	if !strings.Contains(output.String(), "host=poller-host") {
+		t.Errorf("echo output missing configured hostname tag:\n%s", output.String())
+	}
+}
+
+func TestBuildBackendsOmitsDisabledAndValidatesRouting(t *testing.T) {
+	logger, _ := monitor.NewLogger("info")
+	cfg := &config.Config{
+		InfluxDB: config.InfluxDBConfig{Enabled: true},
+		Routing: config.RoutingConfig{
+			InfluxDBInclude:      []string{"docsis_*"},
+			ElasticsearchInclude: []string{"docsis_event"},
+		},
+	}
+	backends, err := buildBackends(cfg, false, nil, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backends) != 1 {
+		t.Fatalf("backend count = %d, want 1", len(backends))
+	}
+	cfg.Routing.InfluxDBInclude = []string{"*invalid*"}
+	if _, err := buildBackends(cfg, false, nil, logger); err == nil {
+		t.Fatal("invalid routing pattern was accepted")
 	}
 }
 
@@ -116,7 +142,14 @@ func TestReloadDoesNotChangeRunningElasticsearchBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger, levelVar := monitor.NewLogger(cfg.LogLevel)
-	_, elasticsearchBackend := buildBackends(cfg, false, nil, logger)
+	backends, err := buildBackends(cfg, false, nil, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backends) != 1 {
+		t.Fatalf("backend count = %d, want 1", len(backends))
+	}
+	elasticsearchBackend := backends[0]
 	filter, ok := elasticsearchBackend.(*monitor.MeasurementFilter)
 	if !ok {
 		t.Fatalf("Elasticsearch backend type = %T, want *monitor.MeasurementFilter", elasticsearchBackend)

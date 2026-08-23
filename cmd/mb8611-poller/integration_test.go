@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -11,14 +12,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/danweinerdev/mb8611-poller/internal/docsis"
 	"github.com/danweinerdev/mb8611-poller/internal/hnap/hnaptest"
 )
 
 func TestRunEchoOnceIntegration(t *testing.T) {
+	responses := fixtureResponses(t)
 	server := hnaptest.NewServer(t, hnaptest.ServerConfig{
 		Username:  "admin",
 		Password:  "test",
-		Responses: fixtureResponses(t),
+		Responses: responses,
 	})
 	serverURL, err := url.Parse(server.URL)
 	if err != nil {
@@ -45,10 +48,17 @@ elasticsearch:
 	if got := run([]string{"--config", configPath, "--echo", "--run-once"}, &first); got != 0 {
 		t.Fatalf("first run() = %d, output:\n%s", got, first.String())
 	}
+	var logResponse struct {
+		Entries string `json:"MotoStatusLogList"`
+	}
+	if err := json.Unmarshal(responses["GetMotoStatusLog"], &logResponse); err != nil {
+		t.Fatal(err)
+	}
 	for measurement, want := range map[string]int{
 		"docsis_downstream": 34,
 		"docsis_upstream":   5,
 		"docsis_modem":      1,
+		"docsis_event":      len(docsis.ParseEventLog(logResponse.Entries)),
 	} {
 		if got := measurementCount(first.String(), measurement); got != want {
 			t.Errorf("first output %s count = %d, want %d", measurement, got, want)
