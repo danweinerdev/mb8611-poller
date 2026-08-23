@@ -75,19 +75,7 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 
 		if err := c.client.EnsureLogin(ctx); err != nil {
 			if errors.Is(err, hnap.ErrLockedOut) {
-				enteredCooldown := false
-				c.mu.Lock()
-				now := c.clock()
-				until := c.lockoutUntil
-				if now.After(c.lockoutUntil) {
-					until = now.Add(c.cfg.LockoutBackoff)
-					c.lockoutUntil = until
-					enteredCooldown = true
-				}
-				c.mu.Unlock()
-				if enteredCooldown {
-					c.logger.Warn("modem lockout detected, entering cooldown", "until", until)
-				}
+				c.enterLockoutCooldown()
 				return nil, nil
 			}
 			return nil, err
@@ -106,11 +94,16 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 			logAction,
 		)
 		if err != nil {
+			if errors.Is(err, hnap.ErrLockedOut) {
+				c.enterLockoutCooldown()
+				return nil, nil
+			}
 			return nil, err
 		}
 
 		baseTags := map[string]string{"host": c.cfg.Host, "modem": c.cfg.ModemTag}
 		metrics := make([]*monitor.Metric, 0)
+		collectedAt := c.clock()
 
 		if raw, ok := responseFor(responses, downstreamAction); ok {
 			var response struct {
@@ -120,7 +113,7 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 				c.logger.Warn("failed to parse HNAP response", "action", downstreamAction, "error", err)
 			} else {
 				for _, channel := range docsis.ParseDownstream(response.Channels) {
-					metrics = append(metrics, downstreamMetric(channel, baseTags))
+					metrics = append(metrics, downstreamMetric(channel, baseTags, collectedAt))
 				}
 			}
 		} else {
@@ -135,7 +128,7 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 				c.logger.Warn("failed to parse HNAP response", "action", upstreamAction, "error", err)
 			} else {
 				for _, channel := range docsis.ParseUpstream(response.Channels) {
-					metrics = append(metrics, upstreamMetric(channel, baseTags))
+					metrics = append(metrics, upstreamMetric(channel, baseTags, collectedAt))
 				}
 			}
 		} else {
@@ -146,7 +139,7 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 		software, softwareOK := parseSoftware(c, responses)
 		startup, startupOK := parseStartup(c, responses)
 		if connectionOK && softwareOK && startupOK {
-			metrics = append(metrics, modemMetric(connection, software, startup, baseTags))
+			metrics = append(metrics, modemMetric(connection, software, startup, baseTags, collectedAt))
 		}
 
 		if raw, ok := responseFor(responses, logAction); ok {
@@ -157,7 +150,7 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 				c.logger.Warn("failed to parse HNAP response", "action", logAction, "error", err)
 			} else {
 				for _, entry := range docsis.ParseEventLog(response.Entries) {
-					metrics = append(metrics, eventMetric(entry, baseTags))
+					metrics = append(metrics, eventMetric(entry, baseTags, collectedAt))
 				}
 			}
 		} else {
@@ -165,6 +158,22 @@ func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 		}
 
 		return metrics, nil
+	}
+}
+
+func (c *Collector) enterLockoutCooldown() {
+	enteredCooldown := false
+	c.mu.Lock()
+	now := c.clock()
+	until := c.lockoutUntil
+	if !now.Before(c.lockoutUntil) {
+		until = now.Add(c.cfg.LockoutBackoff)
+		c.lockoutUntil = until
+		enteredCooldown = true
+	}
+	c.mu.Unlock()
+	if enteredCooldown {
+		c.logger.Warn("modem lockout detected, entering cooldown", "until", until)
 	}
 }
 
@@ -184,6 +193,10 @@ func parseConnection(c *Collector, responses map[string]json.RawMessage) (docsis
 		c.logger.Warn("failed to parse HNAP response", "action", connectionAction, "error", err)
 		return docsis.ConnectionInfo{}, false
 	}
+	if connection.NetworkAccess == "" && connection.SystemUpTime == "" {
+		c.logger.Warn("HNAP response contained no connection data", "action", connectionAction)
+		return docsis.ConnectionInfo{}, false
+	}
 	return connection, true
 }
 
@@ -196,6 +209,10 @@ func parseSoftware(c *Collector, responses map[string]json.RawMessage) (docsis.S
 	software, err := docsis.ParseSoftware(raw)
 	if err != nil {
 		c.logger.Warn("failed to parse HNAP response", "action", softwareAction, "error", err)
+		return docsis.Software{}, false
+	}
+	if software.SfVer == "" && software.MacAddress == "" && software.SerialNum == "" {
+		c.logger.Warn("HNAP response contained no software data", "action", softwareAction)
 		return docsis.Software{}, false
 	}
 	return software, true
@@ -212,10 +229,14 @@ func parseStartup(c *Collector, responses map[string]json.RawMessage) (docsis.St
 		c.logger.Warn("failed to parse HNAP response", "action", startupAction, "error", err)
 		return docsis.StartupSequence{}, false
 	}
+	if startup.BootStatus == "" && startup.ConnectivityStatus == "" && startup.SecurityStatus == "" {
+		c.logger.Warn("HNAP response contained no startup data", "action", startupAction)
+		return docsis.StartupSequence{}, false
+	}
 	return startup, true
 }
 
-func downstreamMetric(channel docsis.DownstreamChannel, baseTags map[string]string) *monitor.Metric {
+func downstreamMetric(channel docsis.DownstreamChannel, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
 	tags := copyTags(baseTags)
 	tags["channel_id"] = strconv.Itoa(channel.ChannelID)
 	tags["channel"] = strconv.Itoa(channel.Channel)
@@ -223,6 +244,7 @@ func downstreamMetric(channel docsis.DownstreamChannel, baseTags map[string]stri
 	tags["lock_status"] = channel.LockStatus
 	return &monitor.Metric{
 		Measurement: "docsis_downstream",
+		Timestamp:   timestamp,
 		Tags:        tags,
 		Fields: map[string]interface{}{
 			"frequency_mhz": channel.FreqMHz,
@@ -234,7 +256,7 @@ func downstreamMetric(channel docsis.DownstreamChannel, baseTags map[string]stri
 	}
 }
 
-func upstreamMetric(channel docsis.UpstreamChannel, baseTags map[string]string) *monitor.Metric {
+func upstreamMetric(channel docsis.UpstreamChannel, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
 	tags := copyTags(baseTags)
 	tags["channel_id"] = strconv.Itoa(channel.ChannelID)
 	tags["channel"] = strconv.Itoa(channel.Channel)
@@ -242,6 +264,7 @@ func upstreamMetric(channel docsis.UpstreamChannel, baseTags map[string]string) 
 	tags["lock_status"] = channel.LockStatus
 	return &monitor.Metric{
 		Measurement: "docsis_upstream",
+		Timestamp:   timestamp,
 		Tags:        tags,
 		Fields: map[string]interface{}{
 			"frequency_mhz":  channel.FreqMHz,
@@ -251,7 +274,7 @@ func upstreamMetric(channel docsis.UpstreamChannel, baseTags map[string]string) 
 	}
 }
 
-func modemMetric(connection docsis.ConnectionInfo, software docsis.Software, startup docsis.StartupSequence, baseTags map[string]string) *monitor.Metric {
+func modemMetric(connection docsis.ConnectionInfo, software docsis.Software, startup docsis.StartupSequence, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
 	tags := copyTags(baseTags)
 	tags["mac"] = software.MacAddress
 	tags["serial"] = software.SerialNum
@@ -263,6 +286,7 @@ func modemMetric(connection docsis.ConnectionInfo, software docsis.Software, sta
 	uptime, _ := connection.Uptime()
 	return &monitor.Metric{
 		Measurement: "docsis_modem",
+		Timestamp:   timestamp,
 		Tags:        tags,
 		Fields: map[string]interface{}{
 			"uptime_seconds": uptime.Seconds(),
@@ -271,12 +295,13 @@ func modemMetric(connection docsis.ConnectionInfo, software docsis.Software, sta
 	}
 }
 
-func eventMetric(entry docsis.EventEntry, baseTags map[string]string) *monitor.Metric {
+func eventMetric(entry docsis.EventEntry, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
 	tags := copyTags(baseTags)
 	tags["severity"] = entry.Severity
 	tags["doc_id"] = docsis.DocID(entry)
 	return &monitor.Metric{
 		Measurement: "docsis_event",
+		Timestamp:   timestamp,
 		Tags:        tags,
 		Fields: map[string]interface{}{
 			"message":  entry.Message,

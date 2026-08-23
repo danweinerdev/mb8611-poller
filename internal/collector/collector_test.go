@@ -12,12 +12,15 @@ import (
 	"time"
 
 	monitor "github.com/danweinerdev/go-monitor"
+	"github.com/danweinerdev/mb8611-poller/internal/hnap"
 	"github.com/danweinerdev/mb8611-poller/internal/hnap/hnaptest"
 )
 
 func TestMakeCollectFuncFixtures(t *testing.T) {
 	mock := fixtureClient()
 	collector := NewCollector(mock, Config{Host: "collector-host", ModemTag: "modem.lan"}, slog.Default())
+	wantTimestamp := time.Date(2026, time.August, 23, 5, 30, 0, 0, time.UTC)
+	setCollectorClock(collector, func() time.Time { return wantTimestamp })
 	metrics, err := MakeCollectFunc(collector)(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -26,6 +29,9 @@ func TestMakeCollectFuncFixtures(t *testing.T) {
 	counts := map[string]int{}
 	for _, metric := range metrics {
 		counts[metric.Measurement]++
+		if !metric.Timestamp.Equal(wantTimestamp) {
+			t.Fatalf("metric %q timestamp = %v, want %v", metric.Measurement, metric.Timestamp, wantTimestamp)
+		}
 		if metric.Tags["host"] != "collector-host" || metric.Tags["modem"] != "modem.lan" {
 			t.Fatalf("metric %q base tags = %v", metric.Measurement, metric.Tags)
 		}
@@ -77,6 +83,56 @@ func TestMakeCollectFuncFixtures(t *testing.T) {
 				t.Errorf("Multi action %d = %q, want %q", i, got[i], want)
 			}
 		}
+	}
+}
+
+func TestMakeCollectFuncLockoutAtExactDeadlineStartsNewCooldown(t *testing.T) {
+	now := time.Date(2026, time.August, 23, 5, 0, 0, 0, time.UTC)
+	backoff := time.Minute
+	mock := fixtureClient()
+	mock.LockedOut = true
+	collector := NewCollector(mock, Config{LockoutBackoff: backoff}, slog.Default())
+	setCollectorClock(collector, func() time.Time { return now })
+	collect := MakeCollectFunc(collector)
+	if _, err := collect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	firstDeadline := lockoutDeadline(collector)
+	now = firstDeadline
+	if _, err := collect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := lockoutDeadline(collector), now.Add(backoff); !got.Equal(want) {
+		t.Fatalf("deadline = %v, want %v", got, want)
+	}
+}
+
+func TestMakeCollectFuncMultiLockoutStartsCooldown(t *testing.T) {
+	now := time.Date(2026, time.August, 23, 5, 0, 0, 0, time.UTC)
+	backoff := 5 * time.Minute
+	mock := fixtureClient().WithError("GetMultipleHNAPs", hnap.ErrLockedOut)
+	collector := NewCollector(mock, Config{LockoutBackoff: backoff}, slog.Default())
+	setCollectorClock(collector, func() time.Time { return now })
+	metrics, err := MakeCollectFunc(collector)(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics != nil {
+		t.Fatalf("metrics = %v, want nil", metrics)
+	}
+	if got, want := lockoutDeadline(collector), now.Add(backoff); !got.Equal(want) {
+		t.Fatalf("deadline = %v, want %v", got, want)
+	}
+}
+
+func TestMakeCollectFuncOmitsEmptyModemResponse(t *testing.T) {
+	mock := fixtureClient().WithResponse(connectionAction, json.RawMessage(`{}`))
+	metrics, err := MakeCollectFunc(NewCollector(mock, Config{}, slog.Default()))(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metricCounts(metrics)["docsis_modem"]; got != 0 {
+		t.Fatalf("modem metrics = %d, want 0", got)
 	}
 }
 
