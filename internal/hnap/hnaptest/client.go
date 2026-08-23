@@ -72,11 +72,14 @@ func (m *MockClient) Call(_ context.Context, action string, _ any) (json.RawMess
 
 func (m *MockClient) Multi(ctx context.Context, actions ...string) (map[string]json.RawMessage, error) {
 	m.LastMultiArgs = append([]string(nil), actions...)
+	if err, ok := m.Errors["GetMultipleHNAPs"]; ok {
+		return nil, err
+	}
 	responses := make(map[string]json.RawMessage, len(actions))
 	for _, action := range actions {
 		response, err := m.Call(ctx, action, nil)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		responses[action+"Response"] = response
 	}

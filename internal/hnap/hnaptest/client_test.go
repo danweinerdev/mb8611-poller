@@ -45,14 +45,17 @@ func TestMockClientBuildersAndMulti(t *testing.T) {
 	}
 	boom := errors.New("boom")
 	mock := NewMockClient().WithResponse("A", json.RawMessage(`{"a":1}`)).WithFixture("B", "mock.json").WithError("C", boom)
-	responses, err := mock.Multi(context.Background(), "A", "B")
+	responses, err := mock.Multi(context.Background(), "A", "B", "C")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(responses["AResponse"]) != `{"a":1}` || string(responses["BResponse"]) != `{"fixture":true}` {
 		t.Fatalf("responses = %v", responses)
 	}
-	if got := mock.LastMultiArgs; len(got) != 2 || got[0] != "A" || got[1] != "B" {
+	if _, ok := responses["CResponse"]; ok {
+		t.Fatalf("failed action response = %v, want omitted", responses["CResponse"])
+	}
+	if got := mock.LastMultiArgs; len(got) != 3 || got[0] != "A" || got[1] != "B" || got[2] != "C" {
 		t.Fatalf("multi args = %v", got)
 	}
 	if _, err := mock.Call(context.Background(), "C", nil); !errors.Is(err, boom) {
@@ -60,5 +63,18 @@ func TestMockClientBuildersAndMulti(t *testing.T) {
 	}
 	if _, err := mock.Call(context.Background(), "missing", nil); err == nil {
 		t.Fatal("missing response succeeded")
+	}
+}
+
+func TestMockClientMultiWholeFailure(t *testing.T) {
+	boom := errors.New("boom")
+	mock := NewMockClient().WithError("GetMultipleHNAPs", boom)
+
+	responses, err := mock.Multi(context.Background(), "A")
+	if !errors.Is(err, boom) {
+		t.Fatalf("Multi error = %v, want %v", err, boom)
+	}
+	if responses != nil {
+		t.Fatalf("Multi responses = %v, want nil", responses)
 	}
 }

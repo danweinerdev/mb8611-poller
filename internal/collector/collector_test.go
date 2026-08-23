@@ -2,10 +2,16 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
+	monitor "github.com/danweinerdev/go-monitor"
 	"github.com/danweinerdev/mb8611-poller/internal/hnap/hnaptest"
 )
 
@@ -143,6 +149,96 @@ func TestMakeCollectFuncLockoutCooldownSkipsHNAPAndRecovers(t *testing.T) {
 	}
 }
 
+func TestMakeCollectFuncPartialActionFailure(t *testing.T) {
+	baseline := collectFixtureMetrics(t, fixtureClient())
+	baselineCounts := metricCounts(baseline)
+
+	mock := fixtureClient().WithError(upstreamAction, errors.New("boom"))
+	metrics, err := MakeCollectFunc(NewCollector(mock, Config{}, slog.Default()))(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	counts := metricCounts(metrics)
+	if got := counts["docsis_upstream"]; got != 0 {
+		t.Errorf("upstream metric count = %d, want 0", got)
+	}
+	for _, measurement := range []string{"docsis_downstream", "docsis_event", "docsis_modem"} {
+		if got, want := counts[measurement], baselineCounts[measurement]; got != want {
+			t.Errorf("%s metric count = %d, want %d", measurement, got, want)
+		}
+	}
+}
+
+func TestMakeCollectFuncWholeMultiFailure(t *testing.T) {
+	boom := errors.New("boom")
+	mock := fixtureClient().WithError("GetMultipleHNAPs", boom)
+
+	metrics, err := MakeCollectFunc(NewCollector(mock, Config{}, slog.Default()))(context.Background())
+	if !errors.Is(err, boom) {
+		t.Fatalf("CollectFunc error = %v, want %v", err, boom)
+	}
+	if metrics != nil {
+		t.Errorf("metrics = %v, want nil", metrics)
+	}
+}
+
+func TestMakeCollectFuncDropsMalformedEventRows(t *testing.T) {
+	mock := fixtureClient().WithResponse(logAction, json.RawMessage(`{"MotoStatusLogList":"08:00:00^Fri Aug 21 2026^Notice^first}-{malformed^row}-{09:00:00^Fri Aug 21 2026^Critical^last"}`))
+	metrics, err := MakeCollectFunc(NewCollector(mock, Config{}, slog.Default()))(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []any
+	for _, metric := range metrics {
+		if metric.Measurement == "docsis_event" {
+			messages = append(messages, metric.Fields["message"])
+		}
+	}
+	if got, want := len(messages), 2; got != want {
+		t.Fatalf("event metric count = %d, want %d", got, want)
+	}
+	if got, want := messages, []any{"first", "last"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("event messages = %v, want %v", got, want)
+	}
+}
+
+func TestMakeCollectFuncSecondPollPreservesMetricShapes(t *testing.T) {
+	collect := MakeCollectFunc(NewCollector(fixtureClient(), Config{}, slog.Default()))
+	first, err := collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := metricShapes(second), metricShapes(first); !reflect.DeepEqual(got, want) {
+		t.Errorf("second-poll metric shapes = %v, want %v", got, want)
+	}
+}
+
+func TestMakeCollectFuncSteadyStateMetrics(t *testing.T) {
+	collect := MakeCollectFunc(NewCollector(fixtureClient(), Config{}, slog.Default()))
+	first, err := collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := metricCounts(second), metricCounts(first); !reflect.DeepEqual(got, want) {
+		t.Errorf("second-poll metric counts = %v, want %v", got, want)
+	}
+	if got, want := eventDocIDs(second), eventDocIDs(first); !reflect.DeepEqual(got, want) {
+		t.Errorf("second-poll event doc IDs = %v, want %v", got, want)
+	}
+}
+
 func assertNoHNAPTraffic(t *testing.T, mock *hnaptest.MockClient) {
 	t.Helper()
 	if mock.LoginCount != 0 {
@@ -163,6 +259,53 @@ func lockoutDeadline(collector *Collector) time.Time {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	return collector.lockoutUntil
+}
+
+func collectFixtureMetrics(t *testing.T, mock *hnaptest.MockClient) []*monitor.Metric {
+	t.Helper()
+	metrics, err := MakeCollectFunc(NewCollector(mock, Config{}, slog.Default()))(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return metrics
+}
+
+func metricCounts(metrics []*monitor.Metric) map[string]int {
+	counts := make(map[string]int)
+	for _, metric := range metrics {
+		counts[metric.Measurement]++
+	}
+	return counts
+}
+
+func metricShapes(metrics []*monitor.Metric) []string {
+	shapes := make(map[string]struct{})
+	for _, metric := range metrics {
+		keys := make([]string, 0, len(metric.Tags))
+		for key := range metric.Tags {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		shapes[metric.Measurement+":"+strings.Join(keys, ",")] = struct{}{}
+	}
+
+	result := make([]string, 0, len(shapes))
+	for shape := range shapes {
+		result = append(result, shape)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func eventDocIDs(metrics []*monitor.Metric) []string {
+	ids := make([]string, 0)
+	for _, metric := range metrics {
+		if metric.Measurement == "docsis_event" {
+			ids = append(ids, metric.Tags["doc_id"])
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func fixtureClient() *hnaptest.MockClient {
