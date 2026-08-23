@@ -20,6 +20,7 @@ coverage.html
 # Codegraph related
 .code-graph/
 .code-graph.db
+.code-graph-cache.db
 
 # Local reference/credential files; never commit modem secrets.
 /DO_NOT_COMMIT.txt
