@@ -54,6 +54,7 @@ func (c *client) EnsureLogin(ctx context.Context) error {
 }
 
 func (c *client) Login(ctx context.Context) error {
+	c.privateKey = "withoutloginkey"
 	first, err := c.callOnce(ctx, "Login", loginPayload(c.cfg.Username, ""))
 	if err != nil {
 		return err
@@ -192,7 +193,11 @@ func (c *client) setLoginCookie(value string) {
 	if err != nil {
 		return
 	}
-	c.http.Jar.SetCookies(endpoint, []*http.Cookie{{Name: "uid", Value: value, Path: "/"}})
+	cookie, err := http.ParseSetCookie(value)
+	if err != nil {
+		cookie = &http.Cookie{Name: "uid", Value: value, Path: "/"}
+	}
+	c.http.Jar.SetCookies(endpoint, []*http.Cookie{cookie})
 }
 
 func loginPayload(user, password string) map[string]any {
