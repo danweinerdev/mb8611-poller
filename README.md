@@ -146,6 +146,21 @@ index:
 curl -X PUT https://es.lan:9200/_index_template/mb8611-events -H 'Content-Type: application/json' --data-binary @index-template.json
 ```
 
+## Grafana dashboard
+
+Import `grafana/mb8611-influxql-dashboard.json` through Grafana's **Import**
+page and select the prompted InfluxDB datasource. The datasource must use the
+InfluxQL query language, have the configured InfluxDB database or bucket
+mapping available to Grafana, and retain the `docsis_downstream`,
+`docsis_upstream`, and `docsis_modem` measurements for the dashboard's chosen
+time range.
+
+The dashboard provides host, modem, and channel variables; current modem
+uptime and downstream frequency stats; downstream power, SNR, and codeword
+rates; upstream power, frequency, and symbol rate; and modem uptime over time.
+Events are routed to Elasticsearch by default and are therefore not included
+in this InfluxDB dashboard.
+
 ## Routing
 
 Each backend is wrapped by `MeasurementFilter`. Its include list is an
