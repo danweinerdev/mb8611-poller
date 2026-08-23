@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -143,10 +144,13 @@ func (c *client) callOnce(ctx context.Context, action string, payload any) (json
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("SOAPACTION", makeSOAPAction(action))
 	req.Header.Set("HNAP_AUTH", makeHNAPAuth(action, c.privateKey, time.Now()))
+	c.clearMalformedCookie()
 	response, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
@@ -160,6 +164,14 @@ func (c *client) callOnce(ctx context.Context, action string, payload any) (json
 		return nil, err
 	}
 	return raw, nil
+}
+
+func (c *client) clearMalformedCookie() {
+	endpoint, err := url.Parse(c.endpoint)
+	if err != nil {
+		return
+	}
+	c.http.Jar.SetCookies(endpoint, []*http.Cookie{{Name: "", Value: "", Path: "/HNAP1", MaxAge: -1}})
 }
 
 func loginPayload(user, password string) map[string]any {
