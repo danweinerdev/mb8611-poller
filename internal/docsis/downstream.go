@@ -66,10 +66,19 @@ func parseDownstreamFloat(row int, field, raw string) float64 {
 }
 
 func parseDownstreamUint(row int, field, raw string) uint64 {
-	value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
-	if err != nil {
-		slog.Warn("failed to parse downstream channel numeric field", "row", row, "field", field, "value", raw, "error", err)
-		return 0
+	trimmed := strings.TrimSpace(raw)
+	value, err := strconv.ParseUint(trimmed, 10, 64)
+	if err == nil {
+		return value
 	}
-	return value
+
+	// Some MB8611 firmware renders overflowing 32-bit counters as signed
+	// decimal values. Preserve their underlying counter bits.
+	signed, signedErr := strconv.ParseInt(trimmed, 10, 32)
+	if signedErr == nil && signed < 0 {
+		return uint64(uint32(int32(signed)))
+	}
+
+	slog.Warn("failed to parse downstream channel numeric field", "row", row, "field", field, "value", raw, "error", err)
+	return 0
 }

@@ -44,9 +44,20 @@ func TestParseDownstreamFixture(t *testing.T) {
 		FreqMHz:     950,
 		PowerDBmV:   1.1,
 		SnrDB:       41.7,
+		Corrected:   3097357284,
 		Uncorrected: 4599,
 	}); got != want {
 		t.Errorf("last channel = %+v, want %+v", got, want)
+	}
+}
+
+func TestParseDownstreamReinterpretsSignedCounter(t *testing.T) {
+	channels := ParseDownstream("1^Locked^QAM256^2^100^1^40^-1197610012^3^")
+	if len(channels) != 1 {
+		t.Fatalf("channel count = %d, want 1", len(channels))
+	}
+	if got, want := channels[0].Corrected, uint64(3097357284); got != want {
+		t.Fatalf("corrected = %d, want %d", got, want)
 	}
 }
 
