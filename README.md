@@ -1,57 +1,212 @@
 # mb8611-poller
 
-A Go daemon that polls a Motorola MB8611 cable modem over HNAP and ships DOCSIS
-channel and connection metrics to InfluxDB and event-log entries to
-Elasticsearch. It is built on the shared
-[`go-monitor`](https://github.com/danweinerdev/go-monitor) library, which
-provides the collection loop, logging, and backend wiring.
+## Overview
 
-> Status: active development. HNAP collection and the routed
-> InfluxDB/Elasticsearch backend wiring are available.
+`mb8611-poller` is a Go daemon for one Motorola MB8611 cable modem. It polls
+the modem's HNAP interface, sends DOCSIS channel and modem metrics to
+InfluxDB, and sends modem event-log entries to Elasticsearch. It uses
+`go-monitor` for scheduling, logging, and backend delivery.
+
+TLS verification is enabled for the modem by default. Set
+`modem.insecure_tls: true` only as an explicit, trusted-local-network opt-in
+when the modem's self-signed certificate cannot be verified.
 
 ## Quickstart
 
+Copy the example, replace its placeholders, and use echo mode to inspect the
+collected metrics without writing to either backend:
+
 ```sh
-make build && ./bin/mb8611-poller --echo --run-once --config config.yaml
+make build && cp config.yaml.example config.yaml && $EDITOR config.yaml && ./bin/mb8611-poller --echo --run-once --config config.yaml
 ```
 
-The daemon reads the YAML configuration named by `--config`; environment
-variables with the `MB8611_` prefix override its values. `--echo` writes the
-normally routed metrics to standard output instead of connecting to InfluxDB
-or Elasticsearch.
+`--echo` still contacts the modem, but it does not connect to InfluxDB or
+Elasticsearch. Production runs need at least one enabled, fully configured
+backend.
 
-YAML values are literal: `${VAR}` shell-style interpolation is not supported.
-Set the documented `MB8611_*` environment variables to override configuration.
+## Configuration
 
-TLS certificate verification is enabled by default. MB8611 firmware commonly
-uses a self-signed certificate, so set `modem.insecure_tls: true` only on a
-trusted local network when verification cannot succeed.
+The daemon reads the file named by `--config` (default `config.yaml`). YAML
+values are literal; shell-style environment interpolation is not supported.
+Use the environment overrides below rather than placing secrets in YAML.
 
-## Configuration reloads
+| Field | Purpose and default |
+| --- | --- |
+| `modem.host` | Required modem host or address, without the HNAP path. No default. |
+| `modem.username` | HNAP username. Empty is permitted by the loader; MB8611 deployments normally use `admin`. |
+| `modem.password` | Required HNAP password. |
+| `modem.insecure_tls` | Disable modem TLS certificate verification. Defaults to `false`; opt in only for a trusted modem with an unverifiable self-signed certificate. |
+| `modem.lockout_backoff` | Positive cooldown after modem lockout detection. Defaults to `6m`. |
+| `interval` | Required positive polling interval, such as `60s`. |
+| `hostname` | `host` tag on emitted metrics. Empty uses the operating-system hostname. |
+| `log_level` | Required logger threshold: `debug`, `info`, `warn`, or `error`. |
+| `influxdb.enabled` | Enable the InfluxDB backend. Defaults to `false`. |
+| `influxdb.url` | InfluxDB server URL; required when InfluxDB is enabled. |
+| `influxdb.token` | InfluxDB token; required when InfluxDB is enabled. |
+| `influxdb.org` | InfluxDB organization; required when InfluxDB is enabled. |
+| `influxdb.bucket` | InfluxDB bucket; required when InfluxDB is enabled. |
+| `elasticsearch.enabled` | Enable the Elasticsearch backend. Defaults to `false`. |
+| `elasticsearch.url` | Elasticsearch server URL; required when Elasticsearch is enabled. |
+| `elasticsearch.index` | Destination index; required when Elasticsearch is enabled. |
+| `elasticsearch.api_key` | Elasticsearch API key. When empty, both `username` and `password` are required instead. |
+| `elasticsearch.username` | Elasticsearch basic-auth username; used only when no API key is supplied. |
+| `elasticsearch.password` | Elasticsearch basic-auth password; required with `username` when no API key is supplied. |
+| `elasticsearch.insecure_tls` | Disable Elasticsearch TLS verification. Defaults to `false`; enable only for a deliberately trusted self-signed deployment. |
+| `elasticsearch.id_from_tag` | Tag used as the Elasticsearch document ID. Empty leaves ID selection to the backend; `doc_id` makes event writes idempotent. |
+| `routing.influxdb_include` | InfluxDB measurement allowlist. Empty or omitted uses `docsis_downstream`, `docsis_upstream`, and `docsis_modem`. |
+| `routing.elasticsearch_include` | Elasticsearch measurement allowlist. Empty or omitted uses `docsis_event`. |
 
-Send `SIGHUP` to reload the YAML configuration and apply environment
-overrides. Only `interval` and `log_level` take effect in the running daemon.
-Changes to `modem.*`, `influxdb.*`, `elasticsearch.*`, or `routing.*` require
-a daemon restart; existing HNAP and backend connections are not rebuilt on
-reload.
+`config.yaml.example` contains every field and the recommended routing values.
 
-## Building
+## Environment Variables
 
-`go-monitor` is a public module; a plain `go build ./...` / `go test ./...`
-resolves it through the default Go module proxy with no extra configuration.
+Non-empty environment values override YAML after it is parsed. A malformed
+`MB8611_INTERVAL` is ignored and leaves the YAML interval in effect. The other
+variables are used as supplied and then validated with the resulting config.
 
-Common targets:
+For systemd deployments, keep secrets in `/etc/mb8611-poller/env` with mode
+`0600` and use the intended `EnvironmentFile=-/etc/mb8611-poller/env` unit
+setting. The Phase 7.1 unit is not yet implemented in this checkout; this is
+the intended path, not an installation that has been tested here.
 
-- `make build` — static Linux binary into `bin/`
-- `make test` — `go test -v -race ./...`
-- `make lint` — `golangci-lint run` if available, else `go vet ./...`
-- `make verify` — aggregate gate: gofmt check, `go vet`, race tests
-- `make clean` — remove build artifacts
-- `make install` — install the binary to `/usr/local/bin`
+| Variable | Overrides |
+| --- | --- |
+| `MB8611_MODEM_HOST` | `modem.host` |
+| `MB8611_MODEM_USERNAME` | `modem.username` |
+| `MB8611_MODEM_PASSWORD` | `modem.password` |
+| `MB8611_INFLUXDB_URL` | `influxdb.url` |
+| `MB8611_INFLUXDB_TOKEN` | `influxdb.token` |
+| `MB8611_INFLUXDB_ORG` | `influxdb.org` |
+| `MB8611_INFLUXDB_BUCKET` | `influxdb.bucket` |
+| `MB8611_ES_URL` | `elasticsearch.url` |
+| `MB8611_ES_INDEX` | `elasticsearch.index` |
+| `MB8611_ES_API_KEY` | `elasticsearch.api_key` |
+| `MB8611_ES_USERNAME` | `elasticsearch.username` |
+| `MB8611_ES_PASSWORD` | `elasticsearch.password` |
+| `MB8611_INTERVAL` | `interval` |
+| `MB8611_HOSTNAME` | `hostname` |
+| `MB8611_LOG_LEVEL` | `log_level` |
 
-## Design
+There are no environment overrides for backend enablement, TLS settings,
+lockout backoff, Elasticsearch document-ID selection, or routing.
 
-The architecture, HNAP polling approach, and metric/event mapping are
-documented in the design at `.plans/Designs/Mb8611Poller/README.md`. That file
-lives in the project's local planning workspace and is intentionally not part
-of the published repository, so it will not be present in a clone.
+## Backends
+
+### InfluxDB
+
+Set `influxdb.enabled: true` and provide its URL, organization, bucket, and
+token. Grant the token write permission to the configured bucket; it does not
+need broader read or administrative permissions. The default route sends only
+DOCSIS channel and modem measurements to this backend.
+
+### Elasticsearch
+
+Set `elasticsearch.enabled: true` and provide URL, index, and either an API
+key or a basic-auth username/password pair. The credential needs permission to
+create and write documents to the configured index (including Bulk API writes);
+grant only the index privileges required by the Elasticsearch deployment. API
+keys are generally preferable to long-lived basic-auth passwords.
+
+Set `elasticsearch.id_from_tag: doc_id` to use the event's stable ID for
+idempotent writes. The optional index template planned in Phase 7.3 would live
+at `index-template.json`; it is not present yet, and its installation has not
+been tested by this task.
+
+## Routing
+
+Each backend is wrapped by `MeasurementFilter`. Its include list is an
+allowlist: exact names match exactly, and a trailing `*` matches a
+case-sensitive prefix. `*` is valid only as the final character; leading,
+middle, or multiple wildcards are configuration errors. An empty list uses the
+daemon defaults above.
+
+Keep `docsis_downstream`, `docsis_upstream`, and `docsis_modem` in InfluxDB and
+`docsis_event` in Elasticsearch. Sending event messages to InfluxDB can inflate
+cardinality; sending DOCSIS statistics to Elasticsearch clutters the event
+index and wastes indexing resources.
+
+## Operations
+
+### Intended systemd deployment
+
+Phase 7.1 is not yet implemented. Its planned repository unit file is
+`mb8611-poller.service`; its intended installed unit path is
+`/etc/systemd/system/mb8611-poller.service`, its intended config path is
+`/etc/mb8611-poller/config.yaml`, and its intended binary path is
+`/usr/local/bin/mb8611-poller`. Do not treat the following target-host steps as
+installation verification for this checkout:
+
+```sh
+sudo useradd --system mb8611-poller
+sudo make install
+sudo systemctl daemon-reload
+sudo systemctl enable --now mb8611-poller
+sudo journalctl -u mb8611-poller -f
+```
+
+`make install` currently installs only the binary; the config and unit-file
+installation described above await Phase 7.1. On a development host without
+root or systemd, run the Quickstart command directly instead.
+
+### Reload and restart boundaries
+
+After editing `log_level`, send `SIGHUP` (or, once the planned unit exists,
+`systemctl reload mb8611-poller`). The daemon rereads YAML and environment
+overrides, but only these runtime settings take effect without restart:
+
+- `interval`
+- `log_level`
+
+Restart the daemon after changing **any** `modem.*`, `hostname`,
+`influxdb.*`, `elasticsearch.*`, or `routing.*` value. In particular, reload
+does not rebuild the HNAP client, collector tags/lockout settings, backend
+connections or credentials, backend enablement, TLS settings, Elasticsearch
+document-ID behavior, or measurement filters.
+
+## Troubleshooting
+
+### Modem lockout
+
+An `hnap: modem is in lockout` error or a `modem lockout detected, entering
+cooldown` log means the modem rejected the first login stage. The collector
+makes no HNAP traffic for `modem.lockout_backoff` (six minutes by default), so
+do not repeatedly restart or retry during that period. Verify credentials,
+wait for the cooldown to expire, then correct the configuration and restart if
+needed.
+
+### UN-AUTH responses
+
+`UN-AUTH` usually means another browser or client session displaced the
+daemon's single modem admin session, or the modem rebooted and rotated its
+session key. The daemon re-authenticates and retries once. Close competing
+admin sessions and wait for a modem reboot to finish; persistent responses
+also warrant checking the configured username and password.
+
+### TLS failures
+
+The modem's self-signed certificate may cause an unknown-authority or hostname
+verification error. Prefer a verified certificate when possible. If that is
+not possible on a trusted local network, explicitly set
+`modem.insecure_tls: true` and restart; this disables certificate verification.
+Likewise, keep `elasticsearch.insecure_tls` false unless a trusted
+self-signed Elasticsearch deployment requires the explicit opt-in.
+
+## Legacy
+
+Phase 7.3 is not yet implemented. It is planned to add a deprecation marker
+to the repository-root `poller.py`, which remains only as a protocol reference
+and is not a supported deployment path. The same task plans the optional
+repository-root `index-template.json` described in the Elasticsearch section.
+
+## Development
+
+```sh
+make build
+make test
+make lint
+make verify
+```
+
+The architecture, HNAP polling approach, and metric/event mapping are in
+`.plans/Designs/Mb8611Poller/README.md` in the local planning workspace. That
+file is not included in published clones.

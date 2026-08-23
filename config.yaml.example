@@ -1,0 +1,36 @@
+# Motorola MB8611 connection settings.
+modem:
+  host: "changeme" # set via MB8611_MODEM_HOST env var
+  username: "changeme" # set via MB8611_MODEM_USERNAME env var
+  password: "changeme" # set via MB8611_MODEM_PASSWORD env var
+  insecure_tls: false # keep TLS verification enabled; opt in only for a trusted self-signed modem
+  lockout_backoff: 6m # cooldown after modem lockout; defaults to 6m when omitted
+
+# Polling and logging settings.
+interval: 60s # set via MB8611_INTERVAL env var
+hostname: "changeme" # set via MB8611_HOSTNAME env var; empty uses the operating-system hostname
+log_level: "info" # set via MB8611_LOG_LEVEL env var; debug, info, warn, or error
+
+# DOCSIS channel and modem metrics backend.
+influxdb:
+  enabled: false # set true only after all connection settings below are configured
+  url: "changeme" # set via MB8611_INFLUXDB_URL env var
+  token: "changeme" # set via MB8611_INFLUXDB_TOKEN env var
+  org: "changeme" # set via MB8611_INFLUXDB_ORG env var
+  bucket: "changeme" # set via MB8611_INFLUXDB_BUCKET env var
+
+# Modem event-log backend.
+elasticsearch:
+  enabled: false # set true only after all connection settings below are configured
+  url: "changeme" # set via MB8611_ES_URL env var
+  index: "changeme" # set via MB8611_ES_INDEX env var
+  api_key: "changeme" # set via MB8611_ES_API_KEY env var; omit only when using username and password
+  username: "changeme" # set via MB8611_ES_USERNAME env var; used when api_key is empty
+  password: "changeme" # set via MB8611_ES_PASSWORD env var; used when api_key is empty
+  insecure_tls: false # keep TLS verification enabled; opt in only for trusted self-signed Elasticsearch
+  id_from_tag: "doc_id" # use the event ID tag for idempotent Elasticsearch writes
+
+# Per-backend measurement allowlists. Empty or omitted lists use these defaults.
+routing:
+  influxdb_include: ["docsis_downstream", "docsis_upstream", "docsis_modem"] # DOCSIS statistics only
+  elasticsearch_include: ["docsis_event"] # modem event logs only
