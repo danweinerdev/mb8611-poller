@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/danweinerdev/mb8611-poller/internal/hnap"
@@ -11,7 +13,8 @@ import (
 )
 
 func TestClientLoginAndMulti(t *testing.T) {
-	server := hnaptest.NewServer(t, hnaptest.ServerConfig{Password: "secret", Responses: map[string]json.RawMessage{"GetMotoStatusLog": json.RawMessage(`{"MotoStatusLogList":"entry"}`)}})
+	responses := fixtureResponses(t)
+	server := hnaptest.NewServer(t, hnaptest.ServerConfig{Password: "secret", Responses: responses})
 	client := hnap.New(hnap.Config{Host: testHost(t, server.URL), Username: "admin", Password: "secret", InsecureTLS: true})
 	if err := client.EnsureLogin(context.Background()); err != nil {
 		t.Fatal(err)
@@ -25,13 +28,34 @@ func TestClientLoginAndMulti(t *testing.T) {
 	if got := hnaptest.Stats(server).LoginSuccesses; got != 1 {
 		t.Fatalf("duplicate login successes = %d", got)
 	}
-	responses, err := client.Multi(context.Background(), "GetMotoStatusLog")
+	result, err := client.Multi(context.Background(), fixtureActions...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(responses["GetMotoStatusLogResponse"]); got != `{"MotoStatusLogList":"entry"}` {
-		t.Fatalf("response = %s", got)
+	for _, action := range fixtureActions {
+		if got := result[action+"Response"]; len(got) == 0 {
+			t.Fatalf("missing %s response", action)
+		}
 	}
+}
+
+var fixtureActions = []string{
+	"GetMotoStatusDownstreamChannelInfo", "GetMotoStatusUpstreamChannelInfo",
+	"GetMotoStatusConnectionInfo", "GetMotoStatusSoftware",
+	"GetMotoStatusStartupSequence", "GetMotoStatusLog",
+}
+
+func fixtureResponses(t *testing.T) map[string]json.RawMessage {
+	t.Helper()
+	responses := make(map[string]json.RawMessage, len(fixtureActions))
+	for _, action := range fixtureActions {
+		contents, err := os.ReadFile(filepath.Join("hnaptest", "testdata", action+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		responses[action] = contents
+	}
+	return responses
 }
 
 func TestClientLoginFailureModes(t *testing.T) {

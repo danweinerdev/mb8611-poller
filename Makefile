@@ -2,7 +2,7 @@ BINARY := mb8611-poller
 BUILD_DIR := bin
 GOFLAGS := -trimpath -ldflags="-s -w"
 
-.PHONY: build test lint verify clean install
+.PHONY: build test lint verify clean install fixtures
 
 build:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/mb8611-poller
@@ -33,3 +33,10 @@ clean:
 install: build
 	install -d /usr/local/bin
 	install -m 755 $(BUILD_DIR)/$(BINARY) /usr/local/bin/$(BINARY)
+
+# Requires a reachable modem and credentials supplied only through the environment.
+# Example: MB8611_MODEM_HOST=... MB8611_MODEM_USERNAME=... MB8611_MODEM_PASSWORD=... make fixtures
+fixtures:
+	@test -n "$$MB8611_MODEM_HOST" && test -n "$$MB8611_MODEM_USERNAME" && test -n "$$MB8611_MODEM_PASSWORD" || (echo "set MB8611_MODEM_HOST, MB8611_MODEM_USERNAME, and MB8611_MODEM_PASSWORD" >&2; exit 2)
+	go run ./cmd/dump-fixtures --dir internal/hnap/hnaptest/testdata
+	./scripts/scrub-fixtures.sh internal/hnap/hnaptest/testdata
