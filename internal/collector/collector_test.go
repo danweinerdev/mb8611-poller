@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,6 +83,37 @@ func TestMakeCollectFuncFixtures(t *testing.T) {
 			if got[i] != want {
 				t.Errorf("Multi action %d = %q, want %q", i, got[i], want)
 			}
+		}
+	}
+}
+
+func TestMakeCollectFuncSerializesConcurrentPolls(t *testing.T) {
+	mock := fixtureClient()
+	collect := MakeCollectFunc(NewCollector(mock, Config{}, slog.Default()))
+	const polls = 8
+	var wg sync.WaitGroup
+	errorsByPoll := make(chan error, polls)
+	for range polls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := collect(context.Background())
+			errorsByPoll <- err
+		}()
+	}
+	wg.Wait()
+	close(errorsByPoll)
+	for err := range errorsByPoll {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := mock.LoginCount; got != 1 {
+		t.Fatalf("login count = %d, want 1", got)
+	}
+	for _, action := range []string{downstreamAction, upstreamAction, connectionAction, softwareAction, startupAction, logAction} {
+		if got := mock.CallCounts[action]; got != polls {
+			t.Fatalf("call count for %s = %d, want %d", action, got, polls)
 		}
 	}
 }

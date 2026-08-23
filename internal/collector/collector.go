@@ -38,6 +38,7 @@ type Collector struct {
 	cfg    Config
 	logger *slog.Logger
 
+	pollMu       sync.Mutex
 	mu           sync.Mutex
 	lockoutUntil time.Time
 	clock        func() time.Time
@@ -63,6 +64,9 @@ func NewCollector(client hnap.Client, cfg Config, logger *slog.Logger) *Collecto
 // MakeCollectFunc returns a function that performs one modem poll.
 func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 	return func(ctx context.Context) ([]*monitor.Metric, error) {
+		c.pollMu.Lock()
+		defer c.pollMu.Unlock()
+
 		c.mu.Lock()
 		now := c.clock()
 		if now.Before(c.lockoutUntil) {
