@@ -235,12 +235,12 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "alias": "$tag_host / $tag_modem / ch $tag_channel",
+          "alias": "$tag_host / $tag_modem / ch $tag_channel_id",
           "datasource": {
             "type": "influxdb",
             "uid": "${DS_INFLUXDB}"
           },
-          "query": "SELECT mean(\"power_dbmv\") AS \"power_dbmv\" FROM \"docsis_downstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel\" fill(null)",
+          "query": "SELECT mean(\"power_dbmv\") AS \"power_dbmv\" FROM \"docsis_downstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel_id\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel_id\" fill(null)",
           "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series"
@@ -316,12 +316,12 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "alias": "$tag_host / $tag_modem / ch $tag_channel",
+          "alias": "$tag_host / $tag_modem / ch $tag_channel_id",
           "datasource": {
             "type": "influxdb",
             "uid": "${DS_INFLUXDB}"
           },
-          "query": "SELECT mean(\"snr_db\") AS \"snr_db\" FROM \"docsis_downstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel\" fill(null)",
+          "query": "SELECT mean(\"snr_db\") AS \"snr_db\" FROM \"docsis_downstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel_id\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel_id\" fill(null)",
           "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series"
@@ -386,23 +386,23 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "alias": "corrected $tag_host / $tag_modem / ch $tag_channel",
+          "alias": "corrected $tag_host / $tag_modem / ch $tag_channel_id",
           "datasource": {
             "type": "influxdb",
             "uid": "${DS_INFLUXDB}"
           },
-          "query": "SELECT non_negative_derivative(max(\"corrected\"), 1m) AS \"corrected_per_minute\" FROM \"docsis_downstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel\" fill(null)",
+          "query": "SELECT non_negative_derivative(max(\"corrected\"), 1m) AS \"corrected_per_minute\" FROM \"docsis_downstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel_id\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel_id\" fill(null)",
           "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series"
         },
         {
-          "alias": "uncorrected $tag_host / $tag_modem / ch $tag_channel",
+          "alias": "uncorrected $tag_host / $tag_modem / ch $tag_channel_id",
           "datasource": {
             "type": "influxdb",
             "uid": "${DS_INFLUXDB}"
           },
-          "query": "SELECT non_negative_derivative(max(\"uncorrected\"), 1m) AS \"uncorrected_per_minute\" FROM \"docsis_downstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel\" fill(null)",
+          "query": "SELECT non_negative_derivative(max(\"uncorrected\"), 1m) AS \"uncorrected_per_minute\" FROM \"docsis_downstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel_id\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel_id\" fill(null)",
           "rawQuery": true,
           "refId": "B",
           "resultFormat": "time_series"
@@ -486,12 +486,12 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "alias": "$tag_host / $tag_modem / ch $tag_channel",
+          "alias": "$tag_host / $tag_modem / ch $tag_channel_id",
           "datasource": {
             "type": "influxdb",
             "uid": "${DS_INFLUXDB}"
           },
-          "query": "SELECT mean(\"power_dbmv\") AS \"power_dbmv\" FROM \"docsis_upstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel\" fill(null)",
+          "query": "SELECT mean(\"power_dbmv\") AS \"power_dbmv\" FROM \"docsis_upstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel_id\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel_id\" fill(null)",
           "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series"
@@ -556,12 +556,12 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "alias": "$tag_host / $tag_modem / ch $tag_channel",
+          "alias": "$tag_host / $tag_modem / ch $tag_channel_id",
           "datasource": {
             "type": "influxdb",
             "uid": "${DS_INFLUXDB}"
           },
-          "query": "SELECT mean(\"frequency_mhz\") AS \"frequency_mhz\" FROM \"docsis_upstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel\" fill(null)",
+          "query": "SELECT mean(\"frequency_mhz\") AS \"frequency_mhz\" FROM \"docsis_upstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel_id\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel_id\" fill(null)",
           "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series"
@@ -626,12 +626,12 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "alias": "$tag_host / $tag_modem / ch $tag_channel",
+          "alias": "$tag_host / $tag_modem / ch $tag_channel_id",
           "datasource": {
             "type": "influxdb",
             "uid": "${DS_INFLUXDB}"
           },
-          "query": "SELECT mean(\"symb_rate_ksps\") AS \"symb_rate_ksps\" FROM \"docsis_upstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel\" fill(null)",
+          "query": "SELECT mean(\"symb_rate_ksps\") AS \"symb_rate_ksps\" FROM \"docsis_upstream\" WHERE $timeFilter AND \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/ AND \"channel_id\" =~ /^${channel:regex}$/ GROUP BY time($__interval), \"host\", \"modem\", \"channel_id\" fill(null)",
           "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series"
@@ -782,14 +782,14 @@
           "type": "influxdb",
           "uid": "${DS_INFLUXDB}"
         },
-        "definition": "SHOW TAG VALUES WITH KEY = \"channel\" WHERE \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/",
+        "definition": "SHOW TAG VALUES WITH KEY = \"channel_id\" WHERE \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/",
         "hide": 0,
         "includeAll": true,
         "label": "Channel",
         "multi": true,
         "name": "channel",
         "options": [],
-        "query": "SHOW TAG VALUES WITH KEY = \"channel\" WHERE \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/",
+        "query": "SHOW TAG VALUES WITH KEY = \"channel_id\" WHERE \"host\" =~ /^${host:regex}$/ AND \"modem\" =~ /^${modem:regex}$/",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,

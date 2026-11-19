@@ -1,8 +1,11 @@
 BINARY := mb8611-poller
 BUILD_DIR := bin
 GOFLAGS := -trimpath -ldflags="-s -w"
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# Local tag; pass IMAGE=<registry>/<repo>:<tag> to build for a registry.
+IMAGE ?= localhost/mb8611-poller:$(VERSION)
 
-.PHONY: build test lint verify clean install fixtures
+.PHONY: build test lint verify clean install fixtures image
 
 build:
 	install -d $(BUILD_DIR)
@@ -25,6 +28,11 @@ verify:
 	@test -z "$$(gofmt -l . | tee /dev/stderr)"
 	go vet ./...
 	go test -race ./... -count=1
+
+# Build the runtime container image locally (does not push).
+# Override the tag with: make image IMAGE=localhost/mb8611-poller:test
+image:
+	podman build -f deploy/Containerfile -t $(IMAGE) .
 
 clean:
 	rm -rf $(BUILD_DIR) coverage.out coverage.html

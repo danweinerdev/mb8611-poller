@@ -302,6 +302,7 @@ func writeReloadConfig(t *testing.T, path, elasticsearchURL, interval, logLevel 
 	t.Helper()
 	contents := fmt.Sprintf(`modem:
   host: modem.example
+  username: admin
   password: secret
 interval: %s
 log_level: %s

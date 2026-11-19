@@ -57,7 +57,15 @@ var envOverrides = []string{
 	"MB8611_INTERVAL",
 	"MB8611_HOSTNAME",
 	"MB8611_LOG_LEVEL",
+	"MB8611_MODEM_INSECURE_TLS",
+	"MB8611_MODEM_TLS_FINGERPRINT",
+	"MB8611_MODEM_EVENT_TIMEZONE",
+	"MB8611_INFLUXDB_ENABLED",
+	"MB8611_ES_ENABLED",
 }
+
+const testFingerprint = "ab:cd:ef:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:ab:cd:ef:01:23:45:67:89:ab:cd:ef:01:23:45:67:89"
+const testFingerprintNormalized = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 
 func TestLoadConfig(t *testing.T) {
 	cfg := loadConfig(t, validYAML)
@@ -86,6 +94,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	cfg := loadConfig(t, `
 modem:
   host: modem.example
+  username: admin
   password: password
 interval: 1m
 log_level: info
@@ -101,7 +110,16 @@ log_level: info
 	if cfg.Modem.InsecureTLS || cfg.Modem.LockoutBackoff != defaultLockoutBackoff {
 		t.Fatalf("unexpected modem defaults: %#v", cfg.Modem)
 	}
-	if got := strings.Join(cfg.Routing.InfluxDBInclude, ","); got != "docsis_downstream,docsis_upstream,docsis_modem" {
+	if cfg.Modem.Timeout != 10*time.Second {
+		t.Fatalf("default modem timeout = %s, want 10s", cfg.Modem.Timeout)
+	}
+	if cfg.Modem.EventTimezone != "UTC" || cfg.Modem.EventLocation != time.UTC {
+		t.Fatalf("default event timezone = %q (%v), want UTC", cfg.Modem.EventTimezone, cfg.Modem.EventLocation)
+	}
+	if cfg.Modem.TLSFingerprintSHA256 != "" {
+		t.Fatalf("default TLS fingerprint = %q, want empty", cfg.Modem.TLSFingerprintSHA256)
+	}
+	if got := strings.Join(cfg.Routing.InfluxDBInclude, ","); got != "docsis_downstream,docsis_upstream,docsis_modem,docsis_poll" {
 		t.Fatalf("default InfluxDB include = %q", got)
 	}
 	if got := strings.Join(cfg.Routing.ElasticsearchInclude, ","); got != "docsis_event" {
@@ -116,6 +134,12 @@ func TestLoadConfigValidation(t *testing.T) {
 		field string
 	}{
 		{name: "empty modem host", yaml: strings.Replace(validYAML, "host: modem.example", "host: ''", 1), field: "modem.host"},
+		{name: "empty modem username", yaml: strings.Replace(validYAML, "username: modem-user", "username: ' '", 1), field: "modem.username"},
+		{name: "modem host with path", yaml: strings.Replace(validYAML, "host: modem.example", "host: https://modem.example/HNAP1/", 1), field: "modem.host"},
+		{name: "invalid event timezone", yaml: strings.Replace(validYAML, "lockout_backoff: 7m", "lockout_backoff: 7m\n  event_timezone: Mars/Olympus_Mons", 1), field: "modem.event_timezone"},
+		{name: "short TLS fingerprint", yaml: strings.Replace(validYAML, "lockout_backoff: 7m", "lockout_backoff: 7m\n  tls_fingerprint_sha256: abcd", 1), field: "modem.tls_fingerprint_sha256"},
+		{name: "non-hex TLS fingerprint", yaml: strings.Replace(validYAML, "lockout_backoff: 7m", "lockout_backoff: 7m\n  tls_fingerprint_sha256: "+strings.Repeat("zz", 32), 1), field: "modem.tls_fingerprint_sha256"},
+		{name: "non-positive modem timeout", yaml: strings.Replace(validYAML, "lockout_backoff: 7m", "lockout_backoff: 7m\n  timeout: 0s", 1), field: "modem.timeout"},
 		{name: "empty modem password", yaml: strings.Replace(validYAML, "password: modem-password", "password: ''", 1), field: "modem.password"},
 		{name: "non-positive lockout backoff", yaml: strings.Replace(validYAML, "lockout_backoff: 7m", "lockout_backoff: 0s", 1), field: "modem.lockout_backoff"},
 		{name: "missing influx URL", yaml: strings.Replace(validYAML, "url: http://influx.example:8086", "url: ''", 1), field: "influxdb.url"},
@@ -189,6 +213,13 @@ func TestLoadConfigEnvOverrides(t *testing.T) {
 		{name: "MB8611_INTERVAL", value: "2m", check: func(cfg *Config) bool { return cfg.Interval == 2*time.Minute }},
 		{name: "MB8611_HOSTNAME", value: "override-hostname", check: func(cfg *Config) bool { return cfg.Hostname == "override-hostname" }},
 		{name: "MB8611_LOG_LEVEL", value: "error", check: func(cfg *Config) bool { return cfg.LogLevel == "error" }},
+		{name: "MB8611_MODEM_INSECURE_TLS", value: "true", check: func(cfg *Config) bool { return cfg.Modem.InsecureTLS }},
+		{name: "MB8611_MODEM_TLS_FINGERPRINT", value: testFingerprint, check: func(cfg *Config) bool { return cfg.Modem.TLSFingerprintSHA256 == testFingerprintNormalized }},
+		{name: "MB8611_MODEM_EVENT_TIMEZONE", value: "America/Chicago", check: func(cfg *Config) bool {
+			return cfg.Modem.EventTimezone == "America/Chicago" && cfg.Modem.EventLocation.String() == "America/Chicago"
+		}},
+		{name: "MB8611_INFLUXDB_ENABLED", value: "false", check: func(cfg *Config) bool { return !cfg.InfluxDB.Enabled }},
+		{name: "MB8611_ES_ENABLED", value: "0", check: func(cfg *Config) bool { return !cfg.Elasticsearch.Enabled }},
 	}
 
 	for _, test := range tests {
@@ -203,19 +234,78 @@ func TestLoadConfigEnvOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadConfigIgnoresInvalidIntervalOverride(t *testing.T) {
+func TestLoadConfigRejectsMalformedEnvOverrides(t *testing.T) {
+	for name, value := range map[string]string{
+		"MB8611_INTERVAL":           "not-a-duration",
+		"MB8611_MODEM_INSECURE_TLS": "maybe",
+		"MB8611_INFLUXDB_ENABLED":   "yes please",
+		"MB8611_ES_ENABLED":         "on",
+	} {
+		t.Run(name, func(t *testing.T) {
+			clearEnvOverrides(t)
+			t.Setenv(name, value)
+			_, err := LoadConfig(writeConfig(t, validYAML))
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("LoadConfig() error = %v, want an error naming %s", err, name)
+			}
+		})
+	}
+}
+
+func TestLoadConfigEnablesBackendsFromEnv(t *testing.T) {
 	clearEnvOverrides(t)
-	t.Setenv("MB8611_INTERVAL", "not-a-duration")
-	cfg := loadConfigWithEnv(t, validYAML)
-	if cfg.Interval != 45*time.Second {
-		t.Fatalf("interval = %s, want YAML value 45s", cfg.Interval)
+	t.Setenv("MB8611_INFLUXDB_ENABLED", "true")
+	t.Setenv("MB8611_ES_ENABLED", "1")
+	disabled := strings.Replace(validYAML, "enabled: true", "enabled: false", -1)
+	cfg := loadConfigWithEnv(t, disabled)
+	if !cfg.InfluxDB.Enabled || !cfg.Elasticsearch.Enabled {
+		t.Fatalf("backends enabled = influx %t, es %t; want both true", cfg.InfluxDB.Enabled, cfg.Elasticsearch.Enabled)
+	}
+}
+
+func TestLoadConfigNormalizesModemSettings(t *testing.T) {
+	cfg := loadConfig(t, strings.Replace(strings.Replace(validYAML,
+		"host: modem.example", "host: https://modem.example/", 1),
+		"lockout_backoff: 7m", "lockout_backoff: 7m\n  timeout: 3s\n  event_timezone: America/New_York\n  tls_fingerprint_sha256: \""+testFingerprint+"\"", 1))
+	if cfg.Modem.Host != "modem.example" {
+		t.Errorf("modem host = %q, want scheme and slash stripped", cfg.Modem.Host)
+	}
+	if cfg.Modem.Timeout != 3*time.Second {
+		t.Errorf("modem timeout = %s, want 3s", cfg.Modem.Timeout)
+	}
+	if cfg.Modem.EventLocation == nil || cfg.Modem.EventLocation.String() != "America/New_York" {
+		t.Errorf("event location = %v, want America/New_York", cfg.Modem.EventLocation)
+	}
+	if cfg.Modem.TLSFingerprintSHA256 != testFingerprintNormalized {
+		t.Errorf("fingerprint = %q, want %q", cfg.Modem.TLSFingerprintSHA256, testFingerprintNormalized)
+	}
+}
+
+func TestLoadModemConfigNeedsNoCredentials(t *testing.T) {
+	clearEnvOverrides(t)
+	cfg, err := LoadModemConfig(writeConfig(t, "modem:\n  host: https://modem.example\n"))
+	if err != nil {
+		t.Fatalf("LoadModemConfig() error = %v", err)
+	}
+	if cfg.Modem.Host != "modem.example" || cfg.Modem.Timeout != 10*time.Second {
+		t.Fatalf("modem config = %#v", cfg.Modem)
+	}
+	if _, err := LoadModemConfig(writeConfig(t, "interval: 1m\n")); err == nil || !strings.Contains(err.Error(), "modem.host:") {
+		t.Fatalf("LoadModemConfig() without host error = %v, want modem.host error", err)
 	}
 }
 
 func TestLoadConfigDoesNotInterpolateYAMLVariables(t *testing.T) {
-	cfg := loadConfig(t, strings.Replace(strings.Replace(validYAML, "host: modem.example", "host: ${MB8611_MODEM_HOST}", 1), "password: modem-password", "password: ${MB8611_MODEM_PASSWORD}", 1))
-	if cfg.Modem.Host != "${MB8611_MODEM_HOST}" || cfg.Modem.Password != "${MB8611_MODEM_PASSWORD}" {
+	cfg := loadConfig(t, strings.Replace(strings.Replace(validYAML, "username: modem-user", "username: ${MB8611_MODEM_USERNAME}", 1), "password: modem-password", "password: ${MB8611_MODEM_PASSWORD}", 1))
+	if cfg.Modem.Username != "${MB8611_MODEM_USERNAME}" || cfg.Modem.Password != "${MB8611_MODEM_PASSWORD}" {
 		t.Fatalf("YAML values were interpolated: %#v", cfg.Modem)
+	}
+
+	// A literal ${...} host is kept verbatim and then rejected as a host.
+	clearEnvOverrides(t)
+	_, err := LoadConfig(writeConfig(t, strings.Replace(validYAML, "host: modem.example", "host: ${MB8611_MODEM_HOST}", 1)))
+	if err == nil || !strings.Contains(err.Error(), "${MB8611_MODEM_HOST}") {
+		t.Fatalf("LoadConfig() error = %v, want rejection quoting the literal host", err)
 	}
 }
 
@@ -224,6 +314,9 @@ func TestConfigConverters(t *testing.T) {
 	monitorConfig := cfg.MonitorConfig()
 	if monitorConfig.Global.PollInterval.Duration != 45*time.Second || monitorConfig.Global.LogLevel != "warn" {
 		t.Fatalf("unexpected monitor config: %#v", monitorConfig.Global)
+	}
+	if got, want := monitorConfig.Global.BatchSize, 1000; got != want {
+		t.Fatalf("MonitorConfig batch size = %d, want %d (above one poll's output)", got, want)
 	}
 	if monitorConfig.InfluxDB != cfg.InfluxBackendConfig() {
 		t.Fatalf("MonitorConfig InfluxDB = %#v, want %#v", monitorConfig.InfluxDB, cfg.InfluxBackendConfig())

@@ -13,14 +13,16 @@ import (
 
 // MockClient is a deterministic hnap.Client implementation for collector tests.
 type MockClient struct {
-	Responses     map[string]json.RawMessage
-	Errors        map[string]error
-	LoginErr      error
-	LockedOut     bool
-	LoginCount    int
-	CallCounts    map[string]int
-	LastMultiArgs []string
-	loggedIn      bool
+	Responses  map[string]json.RawMessage
+	Errors     map[string]error
+	LoginErr   error
+	LockedOut  bool
+	LoginCount int
+	// EnsureLoginCalls counts every EnsureLogin attempt, successful or not.
+	EnsureLoginCalls int
+	CallCounts       map[string]int
+	LastMultiArgs    []string
+	loggedIn         bool
 }
 
 var _ hnap.Client = (*MockClient)(nil)
@@ -30,6 +32,7 @@ func NewMockClient() *MockClient {
 }
 
 func (m *MockClient) EnsureLogin(context.Context) error {
+	m.EnsureLoginCalls++
 	if m.LockedOut {
 		return hnap.ErrLockedOut
 	}

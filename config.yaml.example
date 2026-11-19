@@ -1,19 +1,22 @@
 # Motorola MB8611 connection settings.
 modem:
-  host: "changeme" # set via MB8611_MODEM_HOST env var
-  username: "changeme" # set via MB8611_MODEM_USERNAME env var
+  host: "changeme" # set via MB8611_MODEM_HOST env var; host or host:port (an https:// prefix is accepted)
+  username: "changeme" # set via MB8611_MODEM_USERNAME env var; required, normally "admin"
   password: "changeme" # set via MB8611_MODEM_PASSWORD env var
-  insecure_tls: false # keep TLS verification enabled; opt in only for a trusted self-signed modem
-  lockout_backoff: 6m # cooldown after modem lockout; defaults to 6m when omitted
+  tls_fingerprint_sha256: "" # set via MB8611_MODEM_TLS_FINGERPRINT env var; pin the modem's self-signed cert (get it with `mb8611-poller fingerprint`)
+  insecure_tls: false # set via MB8611_MODEM_INSECURE_TLS env var; last resort when you cannot pin; ignored when a fingerprint is set
+  timeout: 10s # per-request HNAP timeout; defaults to 10s when omitted
+  event_timezone: "UTC" # set via MB8611_MODEM_EVENT_TIMEZONE env var; IANA zone of the modem's event-log times
+  lockout_backoff: 6m # cooldown after modem lockout or rejected login; defaults to 6m when omitted
 
 # Polling and logging settings.
-interval: 60s # set via MB8611_INTERVAL env var
+interval: 60s # set via MB8611_INTERVAL env var (an invalid duration is an error)
 hostname: "changeme" # set via MB8611_HOSTNAME env var; empty uses the operating-system hostname
 log_level: "info" # set via MB8611_LOG_LEVEL env var; debug, info, warn, or error
 
 # DOCSIS channel and modem metrics backend.
 influxdb:
-  enabled: false # set true only after all connection settings below are configured
+  enabled: false # set via MB8611_INFLUXDB_ENABLED env var; set true only after all connection settings below are configured
   url: "changeme" # set via MB8611_INFLUXDB_URL env var
   token: "changeme" # set via MB8611_INFLUXDB_TOKEN env var
   org: "changeme" # set via MB8611_INFLUXDB_ORG env var
@@ -21,7 +24,7 @@ influxdb:
 
 # Modem event-log backend.
 elasticsearch:
-  enabled: false # set true only after all connection settings below are configured
+  enabled: false # set via MB8611_ES_ENABLED env var; set true only after all connection settings below are configured
   url: "changeme" # set via MB8611_ES_URL env var
   index: "changeme" # set via MB8611_ES_INDEX env var
   api_key: "changeme" # set via MB8611_ES_API_KEY env var; omit only when using username and password
@@ -32,5 +35,5 @@ elasticsearch:
 
 # Per-backend measurement allowlists. Empty or omitted lists use these defaults.
 routing:
-  influxdb_include: ["docsis_downstream", "docsis_upstream", "docsis_modem"] # DOCSIS statistics only
+  influxdb_include: ["docsis_downstream", "docsis_upstream", "docsis_modem", "docsis_poll"] # DOCSIS statistics and poll status only
   elasticsearch_include: ["docsis_event"] # modem event logs only

@@ -6,6 +6,9 @@ coverage.html
 # Stray root binary from `go build ./...` (use `make build` -> bin/ instead)
 /mb8611-poller
 
+# Sandbox Go module/build cache (bind-mounted at /cache/go)
+.cache/
+
 # Editor / OS cruft
 *.swp
 *.tmp
@@ -13,6 +16,8 @@ coverage.html
 
 # Legacy Python venv from the old poller.py era; must never be committed
 .venv/
+__pycache__/
+*.pyc
 
 # SDD lifecycle locks are operational state, not planning artifacts.
 *.sdd-lock
@@ -24,3 +29,6 @@ coverage.html
 
 # Local reference/credential files; never commit modem secrets.
 /DO_NOT_COMMIT.txt
+
+# Local runtime configuration; may hold credentials.
+config.yaml

@@ -3,9 +3,9 @@ package hnap
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
@@ -23,11 +23,12 @@ type Client interface {
 }
 
 type Config struct {
-	Host        string
-	Username    string
-	Password    string
-	Timeout     time.Duration
-	InsecureTLS bool
+	Host                 string
+	Username             string
+	Password             string
+	Timeout              time.Duration
+	InsecureTLS          bool
+	TLSFingerprintSHA256 string
 }
 
 type client struct {
@@ -38,12 +39,64 @@ type client struct {
 	privateKey string
 }
 
+// maxResponseBytes caps every HNAP response body. A full poll's
+// GetMultipleHNAPs response is tens of kilobytes.
+const maxResponseBytes = 1 << 20
+
+// New returns an HNAP client for cfg. When cfg.TLSFingerprintSHA256 is set,
+// the modem's leaf certificate is pinned and InsecureTLS is ignored.
 func New(cfg Config) Client {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 10 * time.Second
 	}
+	host, err := NormalizeHost(cfg.Host)
+	if err != nil {
+		// Configuration validation rejects such hosts first; keep the raw
+		// value so requests fail with a transport error naming it.
+		host = strings.TrimSpace(cfg.Host)
+	}
 	jar, _ := cookiejar.New(nil)
-	return &client{cfg: cfg, endpoint: "https://" + strings.TrimPrefix(cfg.Host, "https://") + "/HNAP1/", privateKey: "withoutloginkey", http: &http.Client{Timeout: cfg.Timeout, Jar: jar, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureTLS}}}} // #nosec G402 -- explicitly configured for the modem's self-signed cert.
+	return &client{
+		cfg:        cfg,
+		endpoint:   "https://" + host + "/HNAP1/",
+		privateKey: "withoutloginkey",
+		http: &http.Client{
+			Timeout:   cfg.Timeout,
+			Jar:       jar,
+			Transport: &http.Transport{TLSClientConfig: modemTLSConfig(cfg)},
+			// A redirect means the modem is sending the client to its HTML
+			// login page; never follow it. callOnce reports it as ErrUnauth.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	}
+}
+
+// NormalizeHost returns the bare host[:port] for a configured modem host. A
+// leading http:// or https:// (any case) and one trailing slash are accepted
+// and dropped: the HNAP endpoint is always HTTPS. Paths, queries, and other
+// schemes are rejected.
+func NormalizeHost(raw string) (string, error) {
+	host := strings.TrimSpace(raw)
+	if scheme, rest, ok := strings.Cut(host, "://"); ok {
+		switch strings.ToLower(scheme) {
+		case "http", "https":
+			host = rest
+		default:
+			return "", fmt.Errorf("hnap: unsupported scheme %q in modem host %q (HNAP always uses https)", scheme, raw)
+		}
+	}
+	host = strings.TrimSuffix(host, "/")
+	if host == "" {
+		return "", fmt.Errorf("hnap: modem host %q is empty", raw)
+	}
+	if strings.ContainsAny(host, "/?#@ \t") {
+		return "", fmt.Errorf("hnap: modem host %q must be a host or host:port without a path", raw)
+	}
+	parsed, err := url.Parse("https://" + host)
+	if err != nil || parsed.Host != host {
+		return "", fmt.Errorf("hnap: invalid modem host %q", raw)
+	}
+	return host, nil
 }
 
 func (c *client) EnsureLogin(ctx context.Context) error {
@@ -125,7 +178,12 @@ func (c *client) Multi(ctx context.Context, actions ...string) (map[string]json.
 	return wrapper.Response, nil
 }
 
+// Logout ends the modem session. Without an active session it sends nothing,
+// so shutdown during a lockout cooldown stays silent.
 func (c *client) Logout(ctx context.Context) error {
+	if !c.loggedIn {
+		return nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(c.endpoint, "/HNAP1/")+"/Logout.html", nil)
 	if err != nil {
 		return err
@@ -146,7 +204,15 @@ func (c *client) Logout(ctx context.Context) error {
 	return nil
 }
 
-func (c *client) callOnce(ctx context.Context, action string, payload any) (json.RawMessage, error) {
+// callOnce performs one HNAP request. Any failure (transport, non-2xx status,
+// redirect, oversized or non-JSON body) discards the session so the next
+// EnsureLogin authenticates again instead of reusing a dead session.
+func (c *client) callOnce(ctx context.Context, action string, payload any) (raw json.RawMessage, err error) {
+	defer func() {
+		if err != nil {
+			c.loggedIn = false
+		}
+	}()
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -168,12 +234,21 @@ func (c *client) callOnce(ctx context.Context, action string, payload any) (json
 		return nil, err
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("hnap: HTTP %s", response.Status)
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		return nil, fmt.Errorf("%w: %s redirected (HTTP %s) to %q", ErrUnauth, action, response.Status, response.Header.Get("Location"))
 	}
-	var raw json.RawMessage
-	if err := json.NewDecoder(response.Body).Decode(&raw); err != nil {
-		return nil, err
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("hnap: %s: HTTP %s", action, response.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("hnap: read %s response: %w", action, err)
+	}
+	if len(data) > maxResponseBytes {
+		return nil, fmt.Errorf("hnap: %s response exceeds %d bytes", action, maxResponseBytes)
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("hnap: decode %s response: %w", action, err)
 	}
 	return raw, nil
 }

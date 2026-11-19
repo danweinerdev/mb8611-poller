@@ -26,6 +26,9 @@ type ServerConfig struct {
 	FailedLoginsBeforeLockout int
 	ForceUnauthAfter          int
 	PathPrefix                string
+	// Intercept, when set, sees every request first. Returning true means it
+	// wrote the response and normal HNAP handling is skipped.
+	Intercept func(http.ResponseWriter, *http.Request) bool
 }
 
 // ServerStats is a concurrency-safe snapshot returned by Stats.
@@ -36,6 +39,8 @@ type ServerStats struct {
 	Locked         bool
 	LastSOAPAction string
 	LastHNAPAuth   string
+	Logouts        int
+	Requests       int
 }
 
 type serverState struct {
@@ -108,6 +113,21 @@ func Stats(server *httptest.Server) ServerStats {
 }
 
 func (s *serverState) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.stats.Requests++
+	s.mu.Unlock()
+	if s.cfg.Intercept != nil && s.cfg.Intercept(w, r) {
+		return
+	}
+	if r.URL.Path == "/Logout.html" && r.Method == http.MethodGet {
+		s.mu.Lock()
+		s.stats.Logouts++
+		s.authenticated = false
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html></html>"))
+		return
+	}
 	if r.URL.Path != s.cfg.PathPrefix {
 		http.NotFound(w, r)
 		return

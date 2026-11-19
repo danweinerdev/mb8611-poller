@@ -26,11 +26,23 @@ const (
 	logAction        = "GetMotoStatusLog"
 )
 
+// maxFirstSeenEvents bounds the first-seen cache for events without an
+// established modem time. The cache only ever holds entries present in the
+// latest event log, which on an MB8611 is far smaller than this.
+var maxFirstSeenEvents = 4096
+
+// errCooldown marks a poll skipped because of a lockout or auth-failure
+// cooldown. Its text is the docsis_poll error field value.
+var errCooldown = errors.New("lockout cooldown")
+
 // Config controls metric tags and lockout handling for a Collector.
 type Config struct {
 	Host           string
 	ModemTag       string
 	LockoutBackoff time.Duration
+	// EventLocation is the time zone of the modem's event-log times. Nil
+	// means UTC.
+	EventLocation *time.Location
 }
 
 // Collector performs one serial HNAP polling cycle at a time.
@@ -39,7 +51,11 @@ type Collector struct {
 	cfg    Config
 	logger *slog.Logger
 
-	pollMu       sync.Mutex
+	pollMu sync.Mutex
+	// firstSeen maps the doc_id of each event without an established modem
+	// time to when this process first saw it. Guarded by pollMu.
+	firstSeen map[string]time.Time
+
 	mu           sync.Mutex
 	lockoutUntil time.Time
 	clock        func() time.Time
@@ -50,119 +66,150 @@ func NewCollector(client hnap.Client, cfg Config, logger *slog.Logger) *Collecto
 	if cfg.ModemTag == "" {
 		cfg.ModemTag = cfg.Host
 	}
+	if cfg.EventLocation == nil {
+		cfg.EventLocation = time.UTC
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	return &Collector{
-		client: client,
-		cfg:    cfg,
-		logger: logger,
-		clock:  time.Now,
+		client:    client,
+		cfg:       cfg,
+		logger:    logger,
+		clock:     time.Now,
+		firstSeen: make(map[string]time.Time),
 	}
 }
 
 // MakeCollectFunc returns a function that performs one modem poll.
+//
+// Every poll, including a failed or skipped one, returns a docsis_poll status
+// point. Poll failures are therefore reported in that point and logged here,
+// and the returned error is always nil: go-monitor drops every metric of a
+// poll whose CollectFunc returns an error.
 func MakeCollectFunc(c *Collector) monitor.CollectFunc {
 	return func(ctx context.Context) ([]*monitor.Metric, error) {
 		c.pollMu.Lock()
 		defer c.pollMu.Unlock()
 
-		c.mu.Lock()
-		now := c.clock()
-		if now.Before(c.lockoutUntil) {
-			remaining := c.lockoutUntil.Sub(now)
-			c.mu.Unlock()
-			c.logger.Warn("skipping poll during lockout cooldown", "remaining", remaining)
-			return nil, nil
+		start := c.now()
+		metrics, err := c.poll(ctx)
+		duration := c.now().Sub(start)
+		switch {
+		case err == nil:
+		case errors.Is(err, errCooldown):
+			// Logged by poll with the remaining time.
+		default:
+			c.logger.Error("modem poll failed", "error", err, "duration", duration)
 		}
-		c.mu.Unlock()
-
-		if err := c.client.EnsureLogin(ctx); err != nil {
-			if errors.Is(err, hnap.ErrLockedOut) {
-				c.enterLockoutCooldown()
-				return nil, nil
-			}
-			return nil, err
-		}
-
-		c.mu.Lock()
-		c.lockoutUntil = time.Time{}
-		c.mu.Unlock()
-
-		responses, err := c.client.Multi(ctx,
-			downstreamAction,
-			upstreamAction,
-			connectionAction,
-			softwareAction,
-			startupAction,
-			logAction,
-		)
-		if err != nil {
-			if errors.Is(err, hnap.ErrLockedOut) {
-				c.enterLockoutCooldown()
-				return nil, nil
-			}
-			return nil, err
-		}
-
-		baseTags := map[string]string{"host": c.cfg.Host, "modem": c.cfg.ModemTag}
-		metrics := make([]*monitor.Metric, 0)
-		collectedAt := c.clock()
-
-		if raw, ok := responseFor(c, responses, downstreamAction); ok {
-			var response struct {
-				Channels string `json:"MotoConnDownstreamChannel"`
-			}
-			if err := json.Unmarshal(raw, &response); err != nil {
-				c.logger.Warn("failed to parse HNAP response", "action", downstreamAction, "error", err)
-			} else {
-				for _, channel := range docsis.ParseDownstream(response.Channels) {
-					metrics = append(metrics, downstreamMetric(channel, baseTags, collectedAt))
-				}
-			}
-		}
-
-		if raw, ok := responseFor(c, responses, upstreamAction); ok {
-			var response struct {
-				Channels string `json:"MotoConnUpstreamChannel"`
-			}
-			if err := json.Unmarshal(raw, &response); err != nil {
-				c.logger.Warn("failed to parse HNAP response", "action", upstreamAction, "error", err)
-			} else {
-				for _, channel := range docsis.ParseUpstream(response.Channels) {
-					metrics = append(metrics, upstreamMetric(channel, baseTags, collectedAt))
-				}
-			}
-		}
-
-		connection, connectionOK := parseConnection(c, responses)
-		software, softwareOK := parseSoftware(c, responses)
-		startup, startupOK := parseStartup(c, responses)
-		if connectionOK && softwareOK && startupOK {
-			if metric := c.modemMetric(connection, software, startup, baseTags, collectedAt); metric != nil {
-				metrics = append(metrics, metric)
-			}
-		}
-
-		if raw, ok := responseFor(c, responses, logAction); ok {
-			var response struct {
-				Entries string `json:"MotoStatusLogList"`
-			}
-			if err := json.Unmarshal(raw, &response); err != nil {
-				c.logger.Warn("failed to parse HNAP response", "action", logAction, "error", err)
-			} else {
-				for _, entry := range docsis.ParseEventLog(response.Entries) {
-					metrics = append(metrics, eventMetric(entry, baseTags, collectedAt))
-				}
-			}
-		}
-
-		return metrics, nil
+		return append(metrics, c.pollStatusMetric(start, duration, err)), nil
 	}
 }
 
-func (c *Collector) enterLockoutCooldown() {
+func (c *Collector) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.clock()
+}
+
+func (c *Collector) poll(ctx context.Context) ([]*monitor.Metric, error) {
+	c.mu.Lock()
+	now := c.clock()
+	if now.Before(c.lockoutUntil) {
+		remaining := c.lockoutUntil.Sub(now)
+		c.mu.Unlock()
+		c.logger.Warn("skipping poll during lockout cooldown", "remaining", remaining)
+		return nil, errCooldown
+	}
+	c.mu.Unlock()
+
+	if err := c.client.EnsureLogin(ctx); err != nil {
+		c.maybeEnterCooldown(err)
+		return nil, err
+	}
+
+	c.mu.Lock()
+	c.lockoutUntil = time.Time{}
+	c.mu.Unlock()
+
+	responses, err := c.client.Multi(ctx,
+		downstreamAction,
+		upstreamAction,
+		connectionAction,
+		softwareAction,
+		startupAction,
+		logAction,
+	)
+	if err != nil {
+		c.maybeEnterCooldown(err)
+		return nil, err
+	}
+
+	baseTags := map[string]string{"host": c.cfg.Host, "modem": c.cfg.ModemTag}
+	metrics := make([]*monitor.Metric, 0)
+	collectedAt := c.now()
+
+	if raw, ok := responseFor(c, responses, downstreamAction); ok {
+		var response struct {
+			Channels string `json:"MotoConnDownstreamChannel"`
+		}
+		if err := json.Unmarshal(raw, &response); err != nil {
+			c.logger.Warn("failed to parse HNAP response", "action", downstreamAction, "error", err)
+		} else {
+			for _, channel := range docsis.ParseDownstream(response.Channels) {
+				metrics = append(metrics, downstreamMetric(channel, baseTags, collectedAt))
+			}
+		}
+	}
+
+	if raw, ok := responseFor(c, responses, upstreamAction); ok {
+		var response struct {
+			Channels string `json:"MotoConnUpstreamChannel"`
+		}
+		if err := json.Unmarshal(raw, &response); err != nil {
+			c.logger.Warn("failed to parse HNAP response", "action", upstreamAction, "error", err)
+		} else {
+			for _, channel := range docsis.ParseUpstream(response.Channels) {
+				metrics = append(metrics, upstreamMetric(channel, baseTags, collectedAt))
+			}
+		}
+	}
+
+	connection, connectionOK := parseConnection(c, responses)
+	software, softwareOK := parseSoftware(c, responses)
+	startup, startupOK := parseStartup(c, responses)
+	if connectionOK && softwareOK && startupOK {
+		metrics = append(metrics, c.modemMetric(connection, software, startup, baseTags, collectedAt))
+	}
+
+	if raw, ok := responseFor(c, responses, logAction); ok {
+		var response struct {
+			Entries string `json:"MotoStatusLogList"`
+		}
+		if err := json.Unmarshal(raw, &response); err != nil {
+			c.logger.Warn("failed to parse HNAP response", "action", logAction, "error", err)
+		} else {
+			metrics = append(metrics, c.eventMetrics(docsis.ParseEventLog(response.Entries), baseTags, collectedAt)...)
+		}
+	}
+
+	return metrics, nil
+}
+
+// maybeEnterCooldown starts the quiet period after a lockout or a rejected
+// login. Retrying a rejected password every interval is what trips the
+// modem's lockout, so both get the same cooldown.
+func (c *Collector) maybeEnterCooldown(err error) {
+	switch {
+	case errors.Is(err, hnap.ErrLockedOut):
+		c.enterLockoutCooldown("modem lockout detected, entering cooldown")
+	case errors.Is(err, hnap.ErrAuthFailed):
+		c.enterLockoutCooldown("modem rejected credentials, entering cooldown to avoid lockout")
+	}
+}
+
+func (c *Collector) enterLockoutCooldown(message string) {
 	enteredCooldown := false
 	c.mu.Lock()
 	now := c.clock()
@@ -174,7 +221,24 @@ func (c *Collector) enterLockoutCooldown() {
 	}
 	c.mu.Unlock()
 	if enteredCooldown {
-		c.logger.Warn("modem lockout detected, entering cooldown", "until", until)
+		c.logger.Warn(message, "until", until)
+	}
+}
+
+func (c *Collector) pollStatusMetric(start time.Time, duration time.Duration, err error) *monitor.Metric {
+	success, message := 1, ""
+	if err != nil {
+		success, message = 0, err.Error()
+	}
+	return &monitor.Metric{
+		Measurement: "docsis_poll",
+		Timestamp:   start,
+		Tags:        map[string]string{"host": c.cfg.Host, "modem": c.cfg.ModemTag},
+		Fields: map[string]interface{}{
+			"success":     success,
+			"duration_ms": float64(duration) / float64(time.Millisecond),
+			"error":       message,
+		},
 	}
 }
 
@@ -258,12 +322,11 @@ func parseStartup(c *Collector, responses map[string]json.RawMessage) (docsis.St
 	return startup, true
 }
 
+// Channel series are keyed by channel_id only. Status strings are fields, so
+// a modulation or lock change does not start a new series.
 func downstreamMetric(channel docsis.DownstreamChannel, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
 	tags := copyTags(baseTags)
 	tags["channel_id"] = strconv.Itoa(channel.ChannelID)
-	tags["channel"] = strconv.Itoa(channel.Channel)
-	tags["modulation"] = channel.Modulation
-	tags["lock_status"] = channel.LockStatus
 	return &monitor.Metric{
 		Measurement: "docsis_downstream",
 		Timestamp:   timestamp,
@@ -274,6 +337,9 @@ func downstreamMetric(channel docsis.DownstreamChannel, baseTags map[string]stri
 			"snr_db":        channel.SnrDB,
 			"corrected":     channel.Corrected,
 			"uncorrected":   channel.Uncorrected,
+			"locked":        boolInt(strings.EqualFold(strings.TrimSpace(channel.LockStatus), "Locked")),
+			"lock_status":   channel.LockStatus,
+			"modulation":    channel.Modulation,
 		},
 	}
 }
@@ -281,9 +347,6 @@ func downstreamMetric(channel docsis.DownstreamChannel, baseTags map[string]stri
 func upstreamMetric(channel docsis.UpstreamChannel, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
 	tags := copyTags(baseTags)
 	tags["channel_id"] = strconv.Itoa(channel.ChannelID)
-	tags["channel"] = strconv.Itoa(channel.Channel)
-	tags["channel_type"] = channel.ChannelType
-	tags["lock_status"] = channel.LockStatus
 	return &monitor.Metric{
 		Measurement: "docsis_upstream",
 		Timestamp:   timestamp,
@@ -292,41 +355,87 @@ func upstreamMetric(channel docsis.UpstreamChannel, baseTags map[string]string, 
 			"frequency_mhz":  channel.FreqMHz,
 			"power_dbmv":     channel.PowerDBmV,
 			"symb_rate_ksps": channel.SymbRateKsps,
+			"locked":         boolInt(strings.EqualFold(strings.TrimSpace(channel.LockStatus), "Locked")),
+			"lock_status":    channel.LockStatus,
+			"channel_type":   channel.ChannelType,
 		},
 	}
 }
 
+// modemMetric emits the modem status point. A numeric value that fails to
+// parse is left out (with a warning) rather than dropping the whole point or
+// substituting a value of another type.
 func (c *Collector) modemMetric(connection docsis.ConnectionInfo, software docsis.Software, startup docsis.StartupSequence, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
-	uptime, uptimeOK := connection.Uptime()
-	frequency, frequencyOK := frequencyMHz(startup.DSFreq)
-	if !uptimeOK || !frequencyOK {
-		c.logger.Warn("skipping modem metric with invalid numeric data", "uptime", connection.SystemUpTime, "ds_frequency", startup.DSFreq)
-		return nil
-	}
-
 	tags := copyTags(baseTags)
 	tags["mac"] = software.MacAddress
 	tags["serial"] = software.SerialNum
-	tags["boot_status"] = startup.BootStatus
-	tags["connectivity_status"] = startup.ConnectivityStatus
-	tags["security_status"] = startup.SecurityStatus
 	tags["firmware_version"] = software.SfVer
+
+	fields := map[string]interface{}{
+		"boot_status":         startup.BootStatus,
+		"connectivity_status": startup.ConnectivityStatus,
+		"security_status":     startup.SecurityStatus,
+		"boot_ok":             boolInt(strings.EqualFold(strings.TrimSpace(startup.BootStatus), "OK")),
+		"connectivity_ok":     boolInt(strings.EqualFold(strings.TrimSpace(startup.ConnectivityStatus), "OK")),
+		"security_enabled":    boolInt(strings.EqualFold(strings.TrimSpace(startup.SecurityStatus), "Enabled")),
+	}
+	if uptime, ok := connection.Uptime(); ok {
+		fields["uptime_seconds"] = uptime.Seconds()
+	} else {
+		c.logger.Warn("omitting unparseable modem uptime", "uptime", connection.SystemUpTime)
+	}
+	if frequency, ok := frequencyMHz(startup.DSFreq); ok {
+		fields["ds_freq_mhz"] = frequency
+	} else {
+		c.logger.Warn("omitting unparseable modem downstream frequency", "ds_frequency", startup.DSFreq)
+	}
 
 	return &monitor.Metric{
 		Measurement: "docsis_modem",
 		Timestamp:   timestamp,
 		Tags:        tags,
-		Fields: map[string]interface{}{
-			"uptime_seconds": uptime.Seconds(),
-			"ds_freq_mhz":    frequency,
-		},
+		Fields:      fields,
 	}
 }
 
-func eventMetric(entry docsis.EventEntry, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
+// eventMetrics maps the event log to docsis_event points. An event with an
+// established modem time uses that time; one without keeps the time this
+// process first saw it, so its timestamp does not move from poll to poll.
+// The first-seen cache is rebuilt from each successfully parsed log, so it
+// never holds more than the entries currently on the modem, and is capped at
+// maxFirstSeenEvents.
+func (c *Collector) eventMetrics(entries []docsis.EventEntry, baseTags map[string]string, collectedAt time.Time) []*monitor.Metric {
+	ids := docsis.EventDocIDs(entries)
+	firstSeen := make(map[string]time.Time)
+	overflow := false
+	metrics := make([]*monitor.Metric, 0, len(entries))
+	for i, entry := range entries {
+		timestamp, ok := entry.Timestamp(c.cfg.EventLocation)
+		if !ok {
+			seen, known := c.firstSeen[ids[i]]
+			if !known {
+				seen = collectedAt
+			}
+			timestamp = seen
+			if _, kept := firstSeen[ids[i]]; kept || len(firstSeen) < maxFirstSeenEvents {
+				firstSeen[ids[i]] = seen
+			} else {
+				overflow = true
+			}
+		}
+		metrics = append(metrics, eventMetric(entry, ids[i], baseTags, timestamp))
+	}
+	if overflow {
+		c.logger.Warn("event first-seen cache is full; some untimed events use the poll time", "limit", maxFirstSeenEvents)
+	}
+	c.firstSeen = firstSeen
+	return metrics
+}
+
+func eventMetric(entry docsis.EventEntry, docID string, baseTags map[string]string, timestamp time.Time) *monitor.Metric {
 	tags := copyTags(baseTags)
 	tags["severity"] = entry.Severity
-	tags["doc_id"] = docsis.DocID(entry)
+	tags["doc_id"] = docID
 	return &monitor.Metric{
 		Measurement: "docsis_event",
 		Timestamp:   timestamp,
@@ -337,6 +446,13 @@ func eventMetric(entry docsis.EventEntry, baseTags map[string]string, timestamp 
 			"raw_time": entry.Time,
 		},
 	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func copyTags(tags map[string]string) map[string]string {

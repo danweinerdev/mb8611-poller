@@ -1,8 +1,12 @@
 {
   "index_patterns": ["mb8611-events*"],
+  "priority": 200,
+  "_meta": {
+    "description": "mb8611-poller docsis_event documents. Unmapped fields are kept in _source but not indexed (dynamic: false), so a new field never rejects writes."
+  },
   "template": {
     "mappings": {
-      "dynamic": "strict",
+      "dynamic": false,
       "properties": {
         "@timestamp": {"type": "date"},
         "measurement": {"type": "keyword"},

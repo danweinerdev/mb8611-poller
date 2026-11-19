@@ -14,28 +14,38 @@ func TestFixtureMetricSchemaContract(t *testing.T) {
 		fields map[string]interface{}
 	}{
 		"docsis_downstream": {
-			tags: []string{"host", "modem", "channel_id", "channel", "modulation", "lock_status"},
+			tags: []string{"host", "modem", "channel_id"},
 			fields: map[string]interface{}{
 				"frequency_mhz": float64(0), "power_dbmv": float64(0), "snr_db": float64(0),
 				"corrected": uint64(0), "uncorrected": uint64(0),
+				"locked": int(0), "lock_status": string(""), "modulation": string(""),
 			},
 		},
 		"docsis_upstream": {
-			tags: []string{"host", "modem", "channel_id", "channel", "channel_type", "lock_status"},
+			tags: []string{"host", "modem", "channel_id"},
 			fields: map[string]interface{}{
 				"frequency_mhz": float64(0), "power_dbmv": float64(0), "symb_rate_ksps": int(0),
+				"locked": int(0), "lock_status": string(""), "channel_type": string(""),
 			},
 		},
 		"docsis_modem": {
-			tags: []string{"host", "modem", "mac", "serial", "boot_status", "connectivity_status", "security_status", "firmware_version"},
+			tags: []string{"host", "modem", "mac", "serial", "firmware_version"},
 			fields: map[string]interface{}{
 				"uptime_seconds": float64(0), "ds_freq_mhz": float64(0),
+				"boot_status": string(""), "connectivity_status": string(""), "security_status": string(""),
+				"boot_ok": int(0), "connectivity_ok": int(0), "security_enabled": int(0),
 			},
 		},
 		"docsis_event": {
 			tags: []string{"host", "modem", "severity", "doc_id"},
 			fields: map[string]interface{}{
 				"message": string(""), "raw_date": string(""), "raw_time": string(""),
+			},
+		},
+		"docsis_poll": {
+			tags: []string{"host", "modem"},
+			fields: map[string]interface{}{
+				"success": int(0), "duration_ms": float64(0), "error": string(""),
 			},
 		},
 	}

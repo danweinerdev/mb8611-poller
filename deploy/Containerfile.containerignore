@@ -1,0 +1,8 @@
+# Build context allowlist for deploy/Containerfile (podman/buildah read
+# <Containerfile>.containerignore). Everything is excluded except the Go
+# sources the build copies.
+*
+!go.mod
+!go.sum
+!cmd/**
+!internal/**

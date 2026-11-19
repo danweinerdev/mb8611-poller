@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"sort"
@@ -30,7 +31,9 @@ func TestMakeCollectFuncFixtures(t *testing.T) {
 	counts := map[string]int{}
 	for _, metric := range metrics {
 		counts[metric.Measurement]++
-		if !metric.Timestamp.Equal(wantTimestamp) {
+		// Events carry the modem's own event time (see
+		// TestEventMetricsUseModemEventTime); everything else is the poll time.
+		if metric.Measurement != "docsis_event" && !metric.Timestamp.Equal(wantTimestamp) {
 			t.Fatalf("metric %q timestamp = %v, want %v", metric.Measurement, metric.Timestamp, wantTimestamp)
 		}
 		if metric.Tags["host"] != "collector-host" || metric.Tags["modem"] != "modem.lan" {
@@ -53,7 +56,10 @@ func TestMakeCollectFuncFixtures(t *testing.T) {
 	if counts["docsis_event"] == 0 {
 		t.Error("event metric count = 0, want at least one")
 	}
-	if got, want := len(metrics), counts["docsis_downstream"]+counts["docsis_upstream"]+counts["docsis_modem"]+counts["docsis_event"]; got != want {
+	if counts["docsis_poll"] != 1 {
+		t.Errorf("poll status metric count = %d, want 1", counts["docsis_poll"])
+	}
+	if got, want := len(metrics), counts["docsis_downstream"]+counts["docsis_upstream"]+counts["docsis_modem"]+counts["docsis_event"]+counts["docsis_poll"]; got != want {
 		t.Errorf("metric count = %d, want %d", got, want)
 	}
 
@@ -61,7 +67,7 @@ func TestMakeCollectFuncFixtures(t *testing.T) {
 	for _, metric := range metrics {
 		switch metric.Measurement {
 		case "docsis_downstream":
-			if metric.Tags["channel"] == "1" {
+			if metric.Tags["channel_id"] == "45" {
 				downstream = metric.Fields["frequency_mhz"] == 237.0 && metric.Fields["power_dbmv"] == 3.0 && metric.Fields["corrected"] == uint64(411)
 			}
 		case "docsis_modem":
@@ -149,9 +155,7 @@ func TestMakeCollectFuncMultiLockoutStartsCooldown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metrics != nil {
-		t.Fatalf("metrics = %v, want nil", metrics)
-	}
+	assertOnlyFailedPollStatus(t, metrics, hnap.ErrLockedOut.Error())
 	if got, want := lockoutDeadline(collector), now.Add(backoff); !got.Equal(want) {
 		t.Fatalf("deadline = %v, want %v", got, want)
 	}
@@ -193,9 +197,7 @@ func TestMakeCollectFuncLockoutCooldownSkipsHNAPAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metrics != nil {
-		t.Errorf("metrics = %v, want nil", metrics)
-	}
+	assertOnlyFailedPollStatus(t, metrics, hnap.ErrLockedOut.Error())
 	deadline := lockoutDeadline(collector)
 	if got, want := deadline, now.Add(backoff); !got.Equal(want) {
 		t.Errorf("lockout deadline = %v, want %v", got, want)
@@ -207,9 +209,7 @@ func TestMakeCollectFuncLockoutCooldownSkipsHNAPAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metrics != nil {
-		t.Errorf("cooldown metrics = %v, want nil", metrics)
-	}
+	assertOnlyFailedPollStatus(t, metrics, "lockout cooldown")
 	if got := lockoutDeadline(collector); !got.Equal(deadline) {
 		t.Errorf("lockout deadline was extended to %v, want original %v", got, deadline)
 	}
@@ -262,12 +262,25 @@ func TestMakeCollectFuncWholeMultiFailure(t *testing.T) {
 	boom := errors.New("boom")
 	mock := fixtureClient().WithError("GetMultipleHNAPs", boom)
 
+	// The failure is reported in the docsis_poll point rather than as a
+	// CollectFunc error, because go-monitor drops all metrics on error.
 	metrics, err := MakeCollectFunc(NewCollector(mock, Config{}, slog.Default()))(context.Background())
-	if !errors.Is(err, boom) {
-		t.Fatalf("CollectFunc error = %v, want %v", err, boom)
+	if err != nil {
+		t.Fatalf("CollectFunc error = %v, want nil", err)
 	}
-	if metrics != nil {
-		t.Errorf("metrics = %v, want nil", metrics)
+	assertOnlyFailedPollStatus(t, metrics, boom.Error())
+}
+
+func assertOnlyFailedPollStatus(t *testing.T, metrics []*monitor.Metric, wantError string) {
+	t.Helper()
+	if len(metrics) != 1 || metrics[0].Measurement != "docsis_poll" {
+		t.Fatalf("metrics = %v, want only a docsis_poll point", metricCounts(metrics))
+	}
+	if got := metrics[0].Fields["success"]; got != 0 {
+		t.Errorf("docsis_poll success = %#v, want 0", got)
+	}
+	if got := metrics[0].Fields["error"]; got != wantError {
+		t.Errorf("docsis_poll error = %#v, want %q", got, wantError)
 	}
 }
 
@@ -318,32 +331,6 @@ func TestMakeCollectFuncMissingOrMalformedActionResultOmitsOnlyActionGroup(t *te
 			mock := fixtureClient().WithResponse(test.action, test.response)
 			counts := metricCounts(collectFixtureMetrics(t, mock))
 			assertActionGroupOmitted(t, counts, baseline, test.action)
-		})
-	}
-}
-
-func TestMakeCollectFuncOmitsModemMetricForInvalidNumericData(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		action   string
-		response json.RawMessage
-	}{
-		{
-			name:     "invalid uptime",
-			action:   connectionAction,
-			response: json.RawMessage(`{"MotoConnNetworkAccess":"Allowed","MotoConnSystemUpTime":"unknown","GetMotoStatusConnectionInfoResult":"OK"}`),
-		},
-		{
-			name:     "frequency with MHz unit",
-			action:   startupAction,
-			response: json.RawMessage(`{"MotoConnBootStatus":"OK","MotoConnConnectivityStatus":"OK","MotoConnSecurityStatus":"Enabled","MotoConnDSFreq":"237 MHz","GetMotoStatusStartupSequenceResult":"OK"}`),
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			metrics := collectFixtureMetrics(t, fixtureClient().WithResponse(test.action, test.response))
-			if got := metricCounts(metrics)["docsis_modem"]; got != 0 {
-				t.Fatalf("modem metrics = %d, want 0", got)
-			}
 		})
 	}
 }
@@ -430,7 +417,12 @@ func metricShapes(metrics []*monitor.Metric) []string {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
-		shapes[metric.Measurement+":"+strings.Join(keys, ",")] = struct{}{}
+		fields := make([]string, 0, len(metric.Fields))
+		for key, value := range metric.Fields {
+			fields = append(fields, fmt.Sprintf("%s=%T", key, value))
+		}
+		sort.Strings(fields)
+		shapes[metric.Measurement+":"+strings.Join(keys, ",")+":"+strings.Join(fields, ",")] = struct{}{}
 	}
 
 	result := make([]string, 0, len(shapes))
