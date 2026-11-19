@@ -6,7 +6,7 @@
 # The build context is the repository root, but only go.mod, go.sum, cmd/,
 # and internal/ are copied: local files such as config.yaml or
 # DO_NOT_COMMIT.txt never enter any image layer (see
-# deploy/Containerfile.containerignore).
+# deploy/Containerfile.containerignore and .dockerignore).
 #
 # The result is a static, CGO-free binary on distroless static (non-root,
 # UID 65532). Mount the configuration at /etc/mb8611-poller/config.yaml and
@@ -28,6 +28,7 @@ RUN GOOS=linux GOARCH="${TARGETARCH:-amd64}" \
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/mb8611-poller /mb8611-poller
-USER nonroot:nonroot
+# Numeric, so Kubernetes runAsNonRoot can verify it (distroless "nonroot").
+USER 65532:65532
 ENTRYPOINT ["/mb8611-poller"]
 CMD ["run", "--config", "/etc/mb8611-poller/config.yaml"]

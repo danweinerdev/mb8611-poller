@@ -1,0 +1,9 @@
+# Build context allowlist for deploy/Containerfile. podman/buildah read
+# <Containerfile>.containerignore and BuildKit reads <Containerfile>.dockerignore;
+# keep the two identical. Everything is excluded except the Go sources the
+# build copies.
+*
+!go.mod
+!go.sum
+!cmd/**
+!internal/**

@@ -287,8 +287,8 @@ replica (the modem allows one admin session), mount the configuration at
 `MB8611_MODEM_PASSWORD`, `MB8611_MODEM_TLS_FINGERPRINT`,
 `MB8611_INFLUXDB_TOKEN`, and `MB8611_ES_API_KEY` from a Secret. Backends can
 be switched with `MB8611_INFLUXDB_ENABLED` and `MB8611_ES_ENABLED`. The
-distroless user is named `nonroot`, which `runAsNonRoot: true` can't verify,
-so also set `runAsUser: 65532` and `runAsGroup: 65532`. Health is
+image runs as the numeric UID/GID 65532 (distroless `nonroot`), so
+`runAsNonRoot: true` works as is. Health is
 process liveness: the daemon exposes no HTTP endpoint, and a failing modem
 shows up as `docsis_poll` points with `success=0` rather than a crash.
 
