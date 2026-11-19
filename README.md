@@ -436,6 +436,4 @@ MB8611_MODEM_HOST=... MB8611_MODEM_USERNAME=... MB8611_MODEM_PASSWORD=... make f
 
 The target writes fixtures to `internal/hnap/hnaptest/testdata` and then runs
 `scripts/scrub-fixtures.sh` to remove device and customer identifiers. Review
-the scrubbed changes before committing them. Historical design and plan
-material under `.plans/` records how the current implementation was produced;
-it is not the current user or developer guide.
+the scrubbed changes before committing them.

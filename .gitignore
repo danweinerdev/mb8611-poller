@@ -19,8 +19,6 @@ coverage.html
 __pycache__/
 *.pyc
 
-# SDD lifecycle locks are operational state, not planning artifacts.
-*.sdd-lock
 
 # Codegraph related
 .code-graph/

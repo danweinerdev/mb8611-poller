@@ -116,8 +116,3 @@ synchronized whenever a behavior or
 deployment contract changes. Documentation must distinguish `run-once` the
 subcommand from flags, state that echo output is stdout, and describe the
 installed systemd unit as current rather than planned.
-
-`.plans/` contains historical local planning material, not current executable
-specification and not published-clone content. Consult it for context only;
-do not treat it as a reason to change scope or documentation without checking
-the active code and operational artifacts.
